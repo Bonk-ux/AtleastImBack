@@ -164,7 +164,9 @@ UserInputService.InputBegan:Connect(function(input, isProcessed)
     if isProcessed then return end
 
     if input.KeyCode == Enum.KeyCode.L then
-        toggleLongNeck()
+    warn("L key pressed")
+    toggleLongNeck()
+end
     elseif input.KeyCode == Enum.KeyCode.F then
         toggleATVCollision()
     elseif input.KeyCode == Enum.KeyCode.Z then
