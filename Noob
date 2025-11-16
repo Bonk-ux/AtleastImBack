@@ -1,51 +1,58 @@
-if not LPH_OBFUSCATED then
-    LPH_JIT_MAX = function(...) return ... end
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Efial/Chi/434704f21c527353a18f6e885e47b8117759de7d/Scripts/TridentSurvival.lua",true))()
+
+--// SERVICES
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+--// CAMERA + CHARACTER
+local Camera = workspace.CurrentCamera
+local character = workspace.Const.Ignore.LocalCharacter
+local top = character.Top
+local prism = top:WaitForChild("Prism1")
+
+--// LONG NECK VARS
+local originalPrismCFrame = prism.CFrame
+local longNeckEnabled = false
+
+local function toggleLongNeck()
+    longNeckEnabled = not longNeckEnabled
+
+    prism.CFrame = longNeckEnabled
+        and originalPrismCFrame - Vector3.yAxis * 7
+        or originalPrismCFrame
 end
 
--- Services
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local Players = game:GetService("Players")
-local Camera = workspace.CurrentCamera
-local Workspace = workspace
-local Lighting = cloneref(game:GetService("Lighting"))
+--// INPUT: L KEY TOGGLE
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.L then
+        toggleLongNeck()
+    end
+end)
 
--- Character
-local character = Workspace.Const.Ignore.LocalCharacter
-local top = character.Top
-local middle = character.Middle
-local bottom = character.Bottom
-local prism = top.Prism1
-
--- Store the original position of the neck part
-local originalPrismCFrame = prism.CFrame
-
--- Variables
-local longNeckEnabled = false
-local collisionToggle = false
-local ClosestATV = nil
-local speed = 55
-local travel = Vector3.zero
-local Enabled = false
-local atvbypass = true
-
-local MIN_SPEED = 1
-local MAX_SPEED = 150
-local previousSpeed = speed
-local isSpeedToggled = false
-
+--// TIME CHANGER
 local timechangerEnabled = true
 local time = 12
 
--- ATV Look Restriction Bypass
-local trident = { gc = { camera = nil } }
-LPH_JIT_MAX(function()
-    for _, v in pairs(getgc(true)) do
-        if type(v) == "table" and type(rawget(v, "SetMaxRelativeLookExtentsY")) == "function" then
-            trident.gc.camera = v
-        end
+RunService.Heartbeat:Connect(function()
+    if timechangerEnabled then
+        Lighting.ClockTime = time
     end
-end)()
+end)
+
+--// ATV LOOK EXTENT BYPASS (NO ERRORS, NO JIT)
+local trident = { gc = { camera = nil } }
+
+for _, v in pairs(getgc(true)) do
+    if type(v) == "table" and type(rawget(v, "SetMaxRelativeLookExtentsY")) == "function" then
+        trident.gc.camera = v
+    end
+end
 
 task.spawn(function()
     while task.wait() do
@@ -55,148 +62,95 @@ task.spawn(function()
     end
 end)
 
--- ATV Collision Toggle / Noclip (F Key)
-local function toggleATVCollision()
-    if not ClosestATV then return end
-    collisionToggle = not collisionToggle
-    for _, part in ipairs(ClosestATV:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.CanCollide = collisionToggle
-        end
-    end
+--// =========================
+--//   GUI SYSTEM (CLEAN)
+--// =========================
+
+-- MAIN SCREEN GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+---------------------------------------------------------
+---------------------- CJ BUTTON -------------------------
+---------------------------------------------------------
+
+local CJButton = Instance.new("TextButton")
+CJButton.Name = "CJButton"
+CJButton.Parent = screenGui
+CJButton.Text = "CJ"
+CJButton.Font = Enum.Font.SourceSansBold
+CJButton.TextSize = 28
+CJButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+CJButton.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+CJButton.BackgroundTransparency = 0.4
+CJButton.Size = UDim2.new(0, 70, 0, 70)
+CJButton.Position = UDim2.new(0.850000024, 29, 0.800000012, -75)
+CJButton.AnchorPoint = Vector2.new(0.5, 0.5)
+CJButton.BorderSizePixel = 0
+CJButton.AutoButtonColor = false
+
+local UICorner1 = Instance.new("UICorner")
+UICorner1.CornerRadius = UDim.new(1, 0)
+UICorner1.Parent = CJButton
+
+local UIStroke1 = Instance.new("UIStroke")
+UIStroke1.Thickness = 2
+UIStroke1.Color = Color3.fromRGB(40, 40, 40)
+UIStroke1.Transparency = 0.2
+UIStroke1.Parent = CJButton
+
+local function glowEffect(active)
+	CJButton.BackgroundTransparency = active and 0.2 or 0.4
 end
 
-local function clampSpeed(value, min, max)
-    return math.max(min, math.min(max, value))
+local function pressCJ()
+	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.C, false, game)
+	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
 end
 
-local function adjustSpeed(amount)
-    speed = clampSpeed(speed + amount, MIN_SPEED, MAX_SPEED)
+local function releaseCJ()
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.C, false, game)
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
 end
 
-local function toggleSpeed()
-    if isSpeedToggled then
-        speed = previousSpeed
-    else
-        previousSpeed = speed
-        speed = 28
-    end
-    isSpeedToggled = not isSpeedToggled
-end
-
--- Toggle Long Neck (L Key)
-local function toggleLongNeck()
-    longNeckEnabled = not longNeckEnabled
-    top.Prism1.CFrame = longNeckEnabled and originalPrismCFrame - Vector3.yAxis * 7 or originalPrismCFrame
-end
-
--- ATV Detection
-local function GetClosestATV()
-    local closestATV, closestDistance = nil, math.huge
-
-    for _, v in ipairs(Workspace:GetChildren()) do
-        if v:FindFirstChild("Seat") and v:FindFirstChild("Plastics") then
-            local distance = (v.Plastics.Position - middle.Position).Magnitude
-            if distance < closestDistance then
-                closestATV = v
-                closestDistance = distance
-            end
-        end
-    end
-
-    return closestATV
-end
-
--- ATV Fly (Z Key)
-local function FlyHack()
-    RunService.RenderStepped:Connect(function()
-        ClosestATV = GetClosestATV()
-
-        if Enabled and ClosestATV then
-            local plastics = ClosestATV.Plastics
-            plastics.Velocity = Vector3.zero
-
-            local flip2 = ClosestATV.Frame:FindFirstChild("Flip2")
-            if not flip2 then
-                local newFlip = ClosestATV.Frame.Flip:Clone()
-                newFlip.Name = "Flip2"
-                newFlip.Enabled = true
-                newFlip.Parent = ClosestATV.Frame
-            else
-                flip2.Enabled = true
-            end
-
-            if travel.Magnitude > 0 then
-                plastics.Anchored = false
-                plastics.Velocity = travel.Unit * speed
-            else
-                plastics.Velocity = Vector3.zero
-                plastics.Anchored = false
-            end
-        else
-            local flip2 = ClosestATV and ClosestATV.Frame:FindFirstChild("Flip2")
-            if flip2 then
-                flip2.Enabled = false
-            end
-        end
-    end)
-end
-
--- Flip Bypass (Auto)
-RunService.RenderStepped:Connect(function()
-    for _, v in ipairs(Workspace:GetChildren()) do
-        local frame = v:FindFirstChild("Frame")
-        if frame then
-            local flip = frame:FindFirstChild("Flip")
-            if flip and atvbypass then
-                flip.Enabled = true
-                flip.RigidityEnabled = true
-                flip.Responsiveness = math.huge
-            end
-        end
-    end
+CJButton.MouseButton1Down:Connect(function()
+	pressCJ()
+	glowEffect(true)
 end)
 
--- Keybinds
-UserInputService.InputBegan:Connect(function(input, isProcessed)
-    if isProcessed then return end
-
-    if input.KeyCode == Enum.KeyCode.L then
-        toggleLongNeck()
-    elseif input.KeyCode == Enum.KeyCode.F then
-        toggleATVCollision()
-    elseif input.KeyCode == Enum.KeyCode.Z then
-        Enabled = not Enabled
-    elseif input.KeyCode == Enum.KeyCode.Q then
-        toggleSpeed()
-    elseif input.KeyCode == Enum.KeyCode.V then
-        adjustSpeed(5)
-    elseif input.KeyCode == Enum.KeyCode.N then
-        adjustSpeed(-5)
-    end
+CJButton.MouseButton1Up:Connect(function()
+	releaseCJ()
+	glowEffect(false)
 end)
 
--- Movement for ATV Fly
-RunService.RenderStepped:Connect(function()
-    if Enabled and ClosestATV then
-        local cameraCFrame = Camera.CFrame
-        travel = Vector3.zero
-
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then travel += cameraCFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then travel -= cameraCFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then travel += cameraCFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then travel -= cameraCFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.X) then travel += cameraCFrame.UpVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then travel -= cameraCFrame.UpVector end
-    else
-        travel = Vector3.zero
-    end
+CJButton.TouchLongPress:Connect(function()
+	pressCJ()
+	glowEffect(true)
 end)
 
-FlyHack()
+CJButton.TouchEnded:Connect(function()
+	releaseCJ()
+	glowEffect(false)
+end)
 
-RunService.Heartbeat:Connect(function()
-    if timechangerEnabled then
-        Lighting.ClockTime = time
-    end
+---------------------------------------------------------
+---------------------- L BUTTON ---------------------------
+---------------------------------------------------------
+
+local LButton = Instance.new("ImageButton")
+LButton.Name = "LButton"
+LButton.Parent = screenGui
+LButton.Size = UDim2.new(0, 85, 0, 85)
+LButton.Position = UDim2.new(0.850000024, -654, 0.800000012, -220)
+LButton.BackgroundTransparency = 1
+LButton.Image = "rbxassetid://3926305904"
+LButton.ImageRectOffset = Vector2.new(4, 4)
+LButton.ImageRectSize = Vector2.new(36, 36)
+LButton.ImageColor3 = Color3.fromRGB(180, 0, 255)
+
+LButton.MouseButton1Click:Connect(function()
+	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.L, false, game)
+	task.wait(0.05)
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.L, false, game)
 end)
