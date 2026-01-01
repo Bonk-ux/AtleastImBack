@@ -1,58 +1,51 @@
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Efial/Chi/434704f21c527353a18f6e885e47b8117759de7d/Scripts/TridentSurvival.lua",true))()
+-- ==============================================
+-- ATV FUNCTIONALITY (INTACT, UNMODIFIED)
+-- ==============================================
+if not LPH_OBFUSCATED then
+    LPH_JIT_MAX = function(...) return ... end
+end
 
---// SERVICES
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
+-- Services
 local UserInputService = game:GetService("UserInputService")
-local Lighting = game:GetService("Lighting")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
-
---// CAMERA + CHARACTER
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
 local Camera = workspace.CurrentCamera
-local character = workspace.Const.Ignore.LocalCharacter
+local Workspace = workspace
+local Lighting = cloneref(game:GetService("Lighting"))
+
+-- Character
+local character = Workspace.Const.Ignore.LocalCharacter
 local top = character.Top
-local prism = top:WaitForChild("Prism1")
+local middle = character.Middle
+local bottom = character.Bottom
+local prism = top.Prism1
 
---// LONG NECK VARS
+-- Store the original position of the neck part
 local originalPrismCFrame = prism.CFrame
+
+-- Variables
 local longNeckEnabled = false
+local collisionToggle = false
+local ClosestATV = nil
+local speed = 55
+local travel = Vector3.zero
+local Enabled = true -- Auto-enabled
+local atvbypass = true
 
-local function toggleLongNeck()
-    longNeckEnabled = not longNeckEnabled
+local MIN_SPEED = 1
+local MAX_SPEED = 150
+local previousSpeed = speed
+local isSpeedToggled = false
 
-    prism.CFrame = longNeckEnabled
-        and originalPrismCFrame - Vector3.yAxis * 7
-        or originalPrismCFrame
-end
-
---// INPUT: L KEY TOGGLE
-UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.L then
-        toggleLongNeck()
-    end
-end)
-
---// TIME CHANGER
-local timechangerEnabled = true
-local time = 12
-
-RunService.Heartbeat:Connect(function()
-    if timechangerEnabled then
-        Lighting.ClockTime = time
-    end
-end)
-
---// ATV LOOK EXTENT BYPASS (NO ERRORS, NO JIT)
+-- ATV Look Restriction Bypass
 local trident = { gc = { camera = nil } }
-
-for _, v in pairs(getgc(true)) do
-    if type(v) == "table" and type(rawget(v, "SetMaxRelativeLookExtentsY")) == "function" then
-        trident.gc.camera = v
+LPH_JIT_MAX(function()
+    for _, v in pairs(getgc(true)) do
+        if type(v) == "table" and type(rawget(v, "SetMaxRelativeLookExtentsY")) == "function" then
+            trident.gc.camera = v
+        end
     end
-end
+end)()
 
 task.spawn(function()
     while task.wait() do
@@ -62,18 +55,220 @@ task.spawn(function()
     end
 end)
 
---// =========================
---//   GUI SYSTEM (CLEAN)
---// =========================
+-- ATV Collision Toggle / Noclip (F Key) - Expanded part check
+local function toggleATVCollision()
+    if not ClosestATV then return end
+    collisionToggle = not collisionToggle
+    for _, part in ipairs(ClosestATV:GetDescendants()) do
+        -- Target BasePart and its common subclasses to cover all physical parts
+        if part:IsA("BasePart") or part:IsA("MeshPart") or part:IsA("Seat") or part:IsA("Part") then
+            part.CanCollide = collisionToggle
+        end
+    end
+end
 
--- MAIN SCREEN GUI
+local function clampSpeed(value, min, max)
+    return math.max(min, math.min(max, value))
+end
+
+local function adjustSpeed(amount)
+    speed = clampSpeed(speed + amount, MIN_SPEED, MAX_SPEED)
+end
+
+local function toggleSpeed()
+    if isSpeedToggled then
+        speed = previousSpeed
+    else
+        previousSpeed = speed
+        speed = 28
+    end
+    isSpeedToggled = not isSpeedToggled
+end
+
+-- Toggle Long Neck (L Key)
+local function toggleLongNeck()
+    longNeckEnabled = not longNeckEnabled
+    top.Prism1.CFrame = longNeckEnabled and originalPrismCFrame - Vector3.yAxis * 7 or originalPrismCFrame
+end
+
+-- Fixed ATV Detection (Plastics2, Seat direct in model)
+local function GetClosestATV()
+    local closestATV, closestDistance = nil, math.huge
+
+    -- Iterate over top-level models in Workspace
+    for _, model in ipairs(Workspace:GetChildren()) do
+        if model:IsA("Model") then
+            -- Check for Plastics2 and Seat directly in the model
+            local plastics2 = model:FindFirstChild("Plastics2")
+            local seat = model:FindFirstChild("Seat")
+
+            if plastics2 and seat then
+                local distance = (plastics2.Position - middle.Position).Magnitude
+                if distance < closestDistance then
+                    closestATV = model -- Set top-level model as ClosestATV
+                    closestDistance = distance
+                end
+            end
+        end
+    end
+
+    return closestATV
+end
+
+local function FlyHack()
+    RunService.RenderStepped:Connect(function()
+        ClosestATV = GetClosestATV()
+
+        if Enabled and ClosestATV then
+            local plastics = ClosestATV.Plastics2
+            -- Use the top-level model as the primary moving part
+            local atvModel = ClosestATV
+            plastics.Velocity = Vector3.zero
+
+            local flip2 = ClosestATV.Body:FindFirstChild("Flip2")
+            if not flip2 then
+                local newFlip = ClosestATV.Body.Flip:Clone()
+                newFlip.Name = "Flip2"
+                newFlip.Enabled = true
+                newFlip.Parent = ClosestATV.Body
+            else
+                flip2.Enabled = true
+            end
+
+            if travel.Magnitude > 0 then
+                -- Move the entire model instead of just Plastics2
+                for _, part in ipairs(atvModel:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Anchored = false
+                        part.Velocity = travel.Unit * speed
+                    end
+                end
+            else
+                for _, part in ipairs(atvModel:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Velocity = Vector3.zero
+                        part.Anchored = false
+                    end
+                end
+            end
+        else
+            local flip2 = ClosestATV and ClosestATV.Body:FindFirstChild("Flip2")
+            if flip2 then
+                flip2.Enabled = false
+            end
+        end
+    end)
+end
+
+-- Fixed Flip Bypass (targets Flip in Body folder, flip_att removed)
+RunService.RenderStepped:Connect(function()
+    for _, v in ipairs(Workspace:GetChildren()) do
+        local body = v:FindFirstChild("Body", true) -- Search for nested Body folder
+        if body then
+            local flip = body:FindFirstChild("Flip")
+            if flip and atvbypass then
+                flip.Enabled = true
+                flip.RigidityEnabled = true
+                flip.Responsiveness = math.huge
+            end
+        end
+    end
+end)
+
+-- Keybinds (Z key toggle removed)
+UserInputService.InputBegan:Connect(function(input, isProcessed)
+    if isProcessed then return end
+
+    if input.KeyCode == Enum.KeyCode.L then
+        toggleLongNeck()
+    elseif input.KeyCode == Enum.KeyCode.F then
+        toggleATVCollision()
+    elseif input.KeyCode == Enum.KeyCode.Q then
+        toggleSpeed()
+    elseif input.KeyCode == Enum.KeyCode.V then
+        adjustSpeed(5)
+    elseif input.KeyCode == Enum.KeyCode.N then
+        adjustSpeed(-5)
+    end
+end)
+
+-- Movement for ATV Fly
+RunService.RenderStepped:Connect(function()
+    if Enabled and ClosestATV then
+        local cameraCFrame = Camera.CFrame
+        travel = Vector3.zero
+
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then travel += cameraCFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then travel -= cameraCFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then travel += cameraCFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then travel -= cameraCFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.X) then travel += cameraCFrame.UpVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then travel -= cameraCFrame.UpVector end
+    else
+        travel = Vector3.zero
+    end
+end)
+
+FlyHack()
+
+-- ==============================================
+-- ADDITIONAL FUNCTIONS (BELOW ATV CODE)
+-- ==============================================
+
+-- External Trident Survival Script
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Efial/Chi/434704f21c527353a18f6e885e47b8117759de7d/Scripts/TridentSurvival.lua", true))()
+
+-- Services for Additional Features
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local localPlayer = Players.LocalPlayer
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+-- Big Head Effect (Auto-Active)
+local HeadSizeEnabled = true
+local headScale = Vector3.new(2, 2, 2)
+local headTransparency = 0
+local v4 = 0
+local v5 = 25
+local v6 = {}
+
+local function applyHeadChanges(v7)
+    local l_Head_0 = v7:FindFirstChild("Head")
+    if l_Head_0 and l_Head_0:IsA("BasePart") then
+        if HeadSizeEnabled then
+            if not v6[l_Head_0] then
+                v6[l_Head_0] = {
+                    Size = l_Head_0.Size,
+                    Transparency = l_Head_0.Transparency
+                }
+            end
+            l_Head_0.Size = headScale
+            l_Head_0.Transparency = headTransparency
+        elseif v6[l_Head_0] then
+            l_Head_0.Size = v6[l_Head_0].Size
+            l_Head_0.Transparency = v6[l_Head_0].Transparency
+            v6[l_Head_0] = nil
+        end
+    end
+end
+
+-- Big Head Update Loop
+RunService.RenderStepped:Connect(function()
+    v4 = v4 + 1
+    if v5 <= v4 then
+        v4 = 0
+        for _, v11 in pairs(workspace:GetChildren()) do
+            if v11:IsA("Model") and v11 ~= localPlayer.Character then
+                applyHeadChanges(v11)
+            end
+        end
+    end
+end)
+
+-- CJ Button (FULLY FIXED)
 local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "CJButtonGui"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
-
----------------------------------------------------------
----------------------- CJ BUTTON -------------------------
----------------------------------------------------------
 
 local CJButton = Instance.new("TextButton")
 CJButton.Name = "CJButton"
@@ -129,20 +324,20 @@ CJButton.TouchLongPress:Connect(function()
 	glowEffect(true)
 end)
 
-CJButton.TouchEnded:Connect(function()
-	releaseCJ()
-	glowEffect(false)
+-- Fixed touch release (uses InputEnded instead of TouchEnded)
+CJButton.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		releaseCJ()
+		glowEffect(false)
+	end
 end)
 
----------------------------------------------------------
----------------------- L BUTTON ---------------------------
----------------------------------------------------------
-
+-- L Button
 local LButton = Instance.new("ImageButton")
 LButton.Name = "LButton"
-LButton.Parent = screenGui
+LButton.Parent = playerGui
 LButton.Size = UDim2.new(0, 85, 0, 85)
-LButton.Position = UDim2.new(0.850000024, -654, 0.800000012, -220)
+LButton.Position = UDim2.new(0.85, -654, 0.8, -220)
 LButton.BackgroundTransparency = 1
 LButton.Image = "rbxassetid://3926305904"
 LButton.ImageRectOffset = Vector2.new(4, 4)
