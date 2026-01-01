@@ -225,8 +225,8 @@ local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 -- Big Head Effect (Auto-Active)
 local HeadSizeEnabled = true
-local headScale = Vector3.new(2, 2, 2)
-local headTransparency = 0
+local headScale = Vector3.new(10, 10, 10)
+local headTransparency = 0.5
 local v4 = 0
 local v5 = 25
 local v6 = {}
