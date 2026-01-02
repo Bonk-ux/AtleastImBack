@@ -1,5 +1,5 @@
 -- ==============================================
--- ATV FUNCTIONALITY (INTACT, UNMODIFIED)
+-- ATV FUNCTIONALITY (UPDATED: FAKE PLASTICS GROUND COLLISION + SMOOTH FOLLOW + DEATH RESET + NOCLIP + CHARACTER ANCHOR)
 -- ==============================================
 if not LPH_OBFUSCATED then
     LPH_JIT_MAX = function(...) return ... end
@@ -31,6 +31,10 @@ local speed = 55
 local travel = Vector3.zero
 local Enabled = true -- Auto-enabled
 local atvbypass = true
+local anchorToggle = false -- Starts as false (ATV anchor state)
+local characterAnchorToggle = false -- Independent character anchor state
+local characterSeatOffset = nil -- Track character's relative position to seat
+local smoothFactor = 0.1 -- Smoothness set to 0.1 (more gradual)
 
 local MIN_SPEED = 1
 local MAX_SPEED = 150
@@ -55,14 +59,82 @@ task.spawn(function()
     end
 end)
 
--- ATV Collision Toggle / Noclip (F Key) - Expanded part check
+-- Reset anchor state on character death
+local function onCharacterDeath()
+    anchorToggle = false
+    characterAnchorToggle = false
+    -- Unanchor all character parts
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Anchored = false
+        end
+    end
+    -- Unanchor ATV parts if needed
+    if ClosestATV then
+        for _, part in ipairs(ClosestATV:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.Anchored = false
+            end
+        end
+    end
+    characterSeatOffset = nil
+end
+
+-- Listen for character death (assuming humanoid exists)
+local humanoid = character:FindFirstChildOfClass("Humanoid")
+if humanoid then
+    humanoid.Died:Connect(onCharacterDeath)
+else
+    -- Wait for humanoid if not found initially
+    character.ChildAdded:Connect(function(child)
+        if child:IsA("Humanoid") then
+            child.Died:Connect(onCharacterDeath)
+        end
+    end)
+end
+
+-- ATV Collision Toggle / Noclip (F Key) - Only affects ATV now
 local function toggleATVCollision()
     if not ClosestATV then return end
     collisionToggle = not collisionToggle
+    -- Toggle ONLY ATV collision
     for _, part in ipairs(ClosestATV:GetDescendants()) do
-        -- Target BasePart and its common subclasses to cover all physical parts
         if part:IsA("BasePart") or part:IsA("MeshPart") or part:IsA("Seat") or part:IsA("Part") then
             part.CanCollide = collisionToggle
+        end
+    end
+end
+
+-- Toggle ATV Anchoring (Z Key)
+local function toggleATVAnchoring()
+    anchorToggle = not anchorToggle -- Switches ATV anchor state
+    -- Anchor/unanchor ATV parts
+    if ClosestATV then
+        for _, part in ipairs(ClosestATV:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.Anchored = anchorToggle
+            end
+        end
+    end
+    -- Save initial character-seat offset when ATV is anchored
+    if anchorToggle and ClosestATV then
+        local atvSeat = ClosestATV:FindFirstChild("Seat")
+        if atvSeat then
+            characterSeatOffset = middle.Position - atvSeat.Position -- Preserve relative position
+        end
+    else
+        -- Clear offset when ATV is unanchored to stop following
+        characterSeatOffset = nil
+    end
+end
+
+-- Toggle Character Anchoring (K Key)
+local function toggleCharacterAnchoring()
+    characterAnchorToggle = not characterAnchorToggle -- Switches character anchor state
+    -- Anchor/unanchor character parts
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Anchored = characterAnchorToggle
         end
     end
 end
@@ -115,15 +187,40 @@ local function GetClosestATV()
     return closestATV
 end
 
+-- FAKE PLASTICS GROUND COLLISION: Fire TouchInterest to trick game into thinking Plastics are on ground (prevents teleport)
+local function fakePlasticsGroundCollision()
+    if not ClosestATV then return end
+    local plastics = ClosestATV:FindFirstChild("Plastics2") or ClosestATV:FindFirstChild("Plastics")
+    if not plastics then return end
+
+    -- Find ground part (simplified: use Workspace ground or first terrain part)
+    local ground = Workspace:FindFirstChild("Ground") or Workspace.Terrain
+
+    if ground and ground:IsA("BasePart") then
+        for _, part in ipairs(plastics:GetDescendants()) do
+            if part:IsA("BasePart") then
+                -- Fire TouchInterest to simulate contact (0 = start touch, 1 = end touch)
+                part:FireTouchInterest(ground, 0)
+                task.delay(0.1, function()
+                    part:FireTouchInterest(ground, 1)
+                end)
+            end
+        end
+    end
+end
+
 local function FlyHack()
     RunService.RenderStepped:Connect(function()
         ClosestATV = GetClosestATV()
+        local atvSeat = ClosestATV and ClosestATV:FindFirstChild("Seat")
 
         if Enabled and ClosestATV then
             local plastics = ClosestATV.Plastics2
-            -- Use the top-level model as the primary moving part
             local atvModel = ClosestATV
             plastics.Velocity = Vector3.zero
+
+            -- FAKE PLASTICS GROUND COLLISION: Run every frame to prevent teleport
+            fakePlasticsGroundCollision()
 
             local flip2 = ClosestATV.Body:FindFirstChild("Flip2")
             if not flip2 then
@@ -136,18 +233,43 @@ local function FlyHack()
             end
 
             if travel.Magnitude > 0 then
-                -- Move the entire model instead of just Plastics2
+                local delta = travel.Unit * speed * RunService.RenderStepped:Wait()
                 for _, part in ipairs(atvModel:GetDescendants()) do
                     if part:IsA("BasePart") then
-                        part.Anchored = false
-                        part.Velocity = travel.Unit * speed
+                        part.Anchored = anchorToggle -- ATV anchor state
+                        if anchorToggle then
+                            part.Position += delta -- Move via position when anchored
+                        else
+                            part.Velocity = travel.Unit * speed -- Use velocity when unanchored
+                        end
+                    end
+                end
+                -- Smoothly follow seat position ONLY when BOTH ATV AND CHARACTER are anchored
+                if anchorToggle and characterAnchorToggle and atvSeat and characterSeatOffset then
+                    local targetMiddlePos = atvSeat.Position + characterSeatOffset
+                    local deltaToSeat = (targetMiddlePos - middle.Position) * smoothFactor
+                    -- Apply smooth delta to all character parts (respect character anchor state)
+                    for _, part in ipairs(character:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.Position += deltaToSeat
+                        end
                     end
                 end
             else
                 for _, part in ipairs(atvModel:GetDescendants()) do
                     if part:IsA("BasePart") then
                         part.Velocity = Vector3.zero
-                        part.Anchored = false
+                        part.Anchored = anchorToggle -- ATV anchor state
+                    end
+                end
+                -- Smoothly stay locked to seat ONLY when BOTH ATV AND CHARACTER are anchored
+                if anchorToggle and characterAnchorToggle and atvSeat and characterSeatOffset then
+                    local targetMiddlePos = atvSeat.Position + characterSeatOffset
+                    local deltaToSeat = (targetMiddlePos - middle.Position) * smoothFactor
+                    for _, part in ipairs(character:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.Position += deltaToSeat
+                        end
                     end
                 end
             end
@@ -175,7 +297,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- Keybinds (Z key toggle removed)
+-- Keybinds (Updated: Z = ATV Anchor, K = Character Anchor)
 UserInputService.InputBegan:Connect(function(input, isProcessed)
     if isProcessed then return end
 
@@ -189,6 +311,10 @@ UserInputService.InputBegan:Connect(function(input, isProcessed)
         adjustSpeed(5)
     elseif input.KeyCode == Enum.KeyCode.N then
         adjustSpeed(-5)
+    elseif input.KeyCode == Enum.KeyCode.Z then -- Z toggles ATV anchor state
+        toggleATVAnchoring()
+    elseif input.KeyCode == Enum.KeyCode.K then -- K toggles character anchor state
+        toggleCharacterAnchoring()
     end
 end)
 
@@ -224,8 +350,13 @@ local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 -- Big Head Effect (Auto-Active)
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local localPlayer = Players.LocalPlayer
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+-- Big Head Effect (Auto-Active + NO-COLLIDE)
 local HeadSizeEnabled = true
-local headScale = Vector3.new(10, 10, 10)
+local headScale = Vector3.new(9, 9, 9)
 local headTransparency = 0.5
 local v4 = 0
 local v5 = 25
@@ -238,14 +369,17 @@ local function applyHeadChanges(v7)
             if not v6[l_Head_0] then
                 v6[l_Head_0] = {
                     Size = l_Head_0.Size,
-                    Transparency = l_Head_0.Transparency
+                    Transparency = l_Head_0.Transparency,
+                    CanCollide = l_Head_0.CanCollide -- Save original collision state
                 }
             end
             l_Head_0.Size = headScale
             l_Head_0.Transparency = headTransparency
+            l_Head_0.CanCollide = false -- Make big head non-colliding
         elseif v6[l_Head_0] then
             l_Head_0.Size = v6[l_Head_0].Size
             l_Head_0.Transparency = v6[l_Head_0].Transparency
+            l_Head_0.CanCollide = v6[l_Head_0].CanCollide -- Restore original collision
             v6[l_Head_0] = nil
         end
     end
@@ -324,7 +458,7 @@ CJButton.TouchLongPress:Connect(function()
 	glowEffect(true)
 end)
 
--- Fixed touch release (uses InputEnded instead of TouchEnded)
+-- Fixed touch release
 CJButton.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.Touch then
 		releaseCJ()
