@@ -1,5 +1,5 @@
 -- ==============================================
--- ATV FUNCTIONALITY (UPDATED: FAKE PLASTICS GROUND COLLISION + SMOOTH FOLLOW + DEATH RESET + NOCLIP + CHARACTER ANCHOR)
+-- ATV FUNCTIONALITY (FIXED: DECELERATION LAG + FAKE GROUND COLLISION REMOVED)
 -- ==============================================
 if not LPH_OBFUSCATED then
     LPH_JIT_MAX = function(...) return ... end
@@ -12,6 +12,7 @@ local Players = game:GetService("Players")
 local Camera = workspace.CurrentCamera
 local Workspace = workspace
 local Lighting = cloneref(game:GetService("Lighting"))
+local localPlayer = Players.LocalPlayer
 
 -- Character
 local character = Workspace.Const.Ignore.LocalCharacter
@@ -20,7 +21,7 @@ local middle = character.Middle
 local bottom = character.Bottom
 local prism = top.Prism1
 
--- Store the original position of the neck part
+-- Store original neck position
 local originalPrismCFrame = prism.CFrame
 
 -- Variables
@@ -29,12 +30,14 @@ local collisionToggle = false
 local ClosestATV = nil
 local speed = 55
 local travel = Vector3.zero
-local Enabled = true -- Auto-enabled
+local Enabled = true
 local atvbypass = true
-local anchorToggle = false -- Starts as false (ATV anchor state)
-local characterAnchorToggle = false -- Independent character anchor state
-local characterSeatOffset = nil -- Track character's relative position to seat
-local smoothFactor = 0.1 -- Smoothness set to 0.1 (more gradual)
+local anchorToggle = false
+local characterAnchorToggle = false
+local characterSeatOffset = nil
+local smoothFactor = 0.1
+local currentVelocity = Vector3.zero -- For smooth deceleration
+local decelerationFactor = 0.95 -- Slightly higher (closer to 1) for smoother, less laggy deceleration
 
 local MIN_SPEED = 1
 local MAX_SPEED = 150
@@ -59,33 +62,89 @@ task.spawn(function()
     end
 end)
 
--- Reset anchor state on character death
-local function onCharacterDeath()
+-- Core Reset Function (Runs on Death/Spawn)
+local function fullReset()
+    -- Reset anchor states
     anchorToggle = false
     characterAnchorToggle = false
-    -- Unanchor all character parts
+
+    -- Unanchor character parts
     for _, part in ipairs(character:GetDescendants()) do
         if part:IsA("BasePart") then
             part.Anchored = false
         end
     end
-    -- Unanchor ATV parts if needed
+
+    -- Unanchor ATV parts and disable Flip2
     if ClosestATV then
         for _, part in ipairs(ClosestATV:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.Anchored = false
             end
         end
+        local flip2 = ClosestATV.Body:FindFirstChild("Flip2")
+        if flip2 then
+            flip2.Enabled = false
+        end
     end
+
+    -- Reset long neck, seat offset, and velocity
+    longNeckEnabled = false
+    prism.CFrame = originalPrismCFrame
     characterSeatOffset = nil
+    currentVelocity = Vector3.zero
 end
 
--- Listen for character death (assuming humanoid exists)
+-- Function to reset all modified heads (called on death)
+local function resetAllHeads()
+    for head, original in pairs(v6) do
+        if head and head:IsA("BasePart") then
+            head.Size = original.Size
+            head.Transparency = original.Transparency
+            head.CanCollide = original.CanCollide
+        end
+    end
+    v6 = {} -- Clear tracking table
+end
+
+-- Death Handler (Reset big heads on death)
+local function onCharacterDeath()
+    fullReset()
+    resetAllHeads()
+end
+
+-- Spawn Handler
+local function onCharacterSpawn(newCharacter)
+    -- Update character references
+    character = newCharacter or Workspace.Const.Ignore.LocalCharacter
+    top = character:WaitForChild("Top")
+    middle = character:WaitForChild("Middle")
+    bottom = character:WaitForChild("Bottom")
+    prism = top:WaitForChild("Prism1")
+    originalPrismCFrame = prism.CFrame
+
+    -- Run full reset
+    fullReset()
+
+    -- Reconnect death event
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.Died:Connect(onCharacterDeath)
+    else
+        character.ChildAdded:Connect(function(child)
+            if child:IsA("Humanoid") then
+                child.Died:Connect(onCharacterDeath)
+            end
+        end)
+    end
+end
+
+-- Connect spawn/death events
+localPlayer.CharacterAdded:Connect(onCharacterSpawn)
 local humanoid = character:FindFirstChildOfClass("Humanoid")
 if humanoid then
     humanoid.Died:Connect(onCharacterDeath)
 else
-    -- Wait for humanoid if not found initially
     character.ChildAdded:Connect(function(child)
         if child:IsA("Humanoid") then
             child.Died:Connect(onCharacterDeath)
@@ -93,11 +152,10 @@ else
     end)
 end
 
--- ATV Collision Toggle / Noclip (F Key) - Only affects ATV now
+-- ATV Collision Toggle (F Key)
 local function toggleATVCollision()
     if not ClosestATV then return end
     collisionToggle = not collisionToggle
-    -- Toggle ONLY ATV collision
     for _, part in ipairs(ClosestATV:GetDescendants()) do
         if part:IsA("BasePart") or part:IsA("MeshPart") or part:IsA("Seat") or part:IsA("Part") then
             part.CanCollide = collisionToggle
@@ -107,31 +165,28 @@ end
 
 -- Toggle ATV Anchoring (Z Key)
 local function toggleATVAnchoring()
-    anchorToggle = not anchorToggle -- Switches ATV anchor state
-    -- Anchor/unanchor ATV parts
+    anchorToggle = not anchorToggle
     if ClosestATV then
         for _, part in ipairs(ClosestATV:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.Anchored = anchorToggle
             end
         end
-    end
-    -- Save initial character-seat offset when ATV is anchored
-    if anchorToggle and ClosestATV then
-        local atvSeat = ClosestATV:FindFirstChild("Seat")
-        if atvSeat then
-            characterSeatOffset = middle.Position - atvSeat.Position -- Preserve relative position
+        if anchorToggle then
+            local atvSeat = ClosestATV:FindFirstChild("Seat")
+            if atvSeat then
+                characterSeatOffset = middle.Position - atvSeat.Position
+            end
+            currentVelocity = Vector3.zero -- Reset velocity when anchoring
+        else
+            characterSeatOffset = nil
         end
-    else
-        -- Clear offset when ATV is unanchored to stop following
-        characterSeatOffset = nil
     end
 end
 
 -- Toggle Character Anchoring (K Key)
 local function toggleCharacterAnchoring()
-    characterAnchorToggle = not characterAnchorToggle -- Switches character anchor state
-    -- Anchor/unanchor character parts
+    characterAnchorToggle = not characterAnchorToggle
     for _, part in ipairs(character:GetDescendants()) do
         if part:IsA("BasePart") then
             part.Anchored = characterAnchorToggle
@@ -139,14 +194,13 @@ local function toggleCharacterAnchoring()
     end
 end
 
+-- Speed Functions
 local function clampSpeed(value, min, max)
     return math.max(min, math.min(max, value))
 end
-
 local function adjustSpeed(amount)
     speed = clampSpeed(speed + amount, MIN_SPEED, MAX_SPEED)
 end
-
 local function toggleSpeed()
     if isSpeedToggled then
         speed = previousSpeed
@@ -160,67 +214,40 @@ end
 -- Toggle Long Neck (L Key)
 local function toggleLongNeck()
     longNeckEnabled = not longNeckEnabled
-    top.Prism1.CFrame = longNeckEnabled and originalPrismCFrame - Vector3.yAxis * 7 or originalPrismCFrame
+    prism.CFrame = longNeckEnabled and originalPrismCFrame - Vector3.yAxis * 7 or originalPrismCFrame
 end
 
--- Fixed ATV Detection (Plastics2, Seat direct in model)
+-- ATV Detection
 local function GetClosestATV()
     local closestATV, closestDistance = nil, math.huge
-
-    -- Iterate over top-level models in Workspace
     for _, model in ipairs(Workspace:GetChildren()) do
         if model:IsA("Model") then
-            -- Check for Plastics2 and Seat directly in the model
             local plastics2 = model:FindFirstChild("Plastics2")
             local seat = model:FindFirstChild("Seat")
-
             if plastics2 and seat then
                 local distance = (plastics2.Position - middle.Position).Magnitude
                 if distance < closestDistance then
-                    closestATV = model -- Set top-level model as ClosestATV
+                    closestATV = model
                     closestDistance = distance
                 end
             end
         end
     end
-
     return closestATV
 end
 
--- FAKE PLASTICS GROUND COLLISION: Fire TouchInterest to trick game into thinking Plastics are on ground (prevents teleport)
-local function fakePlasticsGroundCollision()
-    if not ClosestATV then return end
-    local plastics = ClosestATV:FindFirstChild("Plastics2") or ClosestATV:FindFirstChild("Plastics")
-    if not plastics then return end
-
-    -- Find ground part (simplified: use Workspace ground or first terrain part)
-    local ground = Workspace:FindFirstChild("Ground") or Workspace.Terrain
-
-    if ground and ground:IsA("BasePart") then
-        for _, part in ipairs(plastics:GetDescendants()) do
-            if part:IsA("BasePart") then
-                -- Fire TouchInterest to simulate contact (0 = start touch, 1 = end touch)
-                part:FireTouchInterest(ground, 0)
-                task.delay(0.1, function()
-                    part:FireTouchInterest(ground, 1)
-                end)
-            end
-        end
-    end
-end
-
+-- Fly Hack Logic (FIXED: Deceleration Lag - Moved to Heartbeat)
 local function FlyHack()
+    -- Movement/ATV logic remains on RenderStepped
     RunService.RenderStepped:Connect(function()
         ClosestATV = GetClosestATV()
         local atvSeat = ClosestATV and ClosestATV:FindFirstChild("Seat")
+        local deltaTime = RunService.RenderStepped:Wait()
 
         if Enabled and ClosestATV then
             local plastics = ClosestATV.Plastics2
             local atvModel = ClosestATV
             plastics.Velocity = Vector3.zero
-
-            -- FAKE PLASTICS GROUND COLLISION: Run every frame to prevent teleport
-            fakePlasticsGroundCollision()
 
             local flip2 = ClosestATV.Body:FindFirstChild("Flip2")
             if not flip2 then
@@ -233,59 +260,85 @@ local function FlyHack()
             end
 
             if travel.Magnitude > 0 then
-                local delta = travel.Unit * speed * RunService.RenderStepped:Wait()
-                for _, part in ipairs(atvModel:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        part.Anchored = anchorToggle -- ATV anchor state
-                        if anchorToggle then
-                            part.Position += delta -- Move via position when anchored
-                        else
-                            part.Velocity = travel.Unit * speed -- Use velocity when unanchored
+                -- Set velocity when moving
+                currentVelocity = travel.Unit * speed
+                if anchorToggle then
+                    local delta = currentVelocity * deltaTime
+                    for _, part in ipairs(atvModel:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.Anchored = true
+                            part.Position += delta
                         end
                     end
-                end
-                -- Smoothly follow seat position ONLY when BOTH ATV AND CHARACTER are anchored
-                if anchorToggle and characterAnchorToggle and atvSeat and characterSeatOffset then
-                    local targetMiddlePos = atvSeat.Position + characterSeatOffset
-                    local deltaToSeat = (targetMiddlePos - middle.Position) * smoothFactor
-                    -- Apply smooth delta to all character parts (respect character anchor state)
-                    for _, part in ipairs(character:GetDescendants()) do
+                else
+                    for _, part in ipairs(atvModel:GetDescendants()) do
                         if part:IsA("BasePart") then
-                            part.Position += deltaToSeat
-                        end
-                    end
-                end
-            else
-                for _, part in ipairs(atvModel:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        part.Velocity = Vector3.zero
-                        part.Anchored = anchorToggle -- ATV anchor state
-                    end
-                end
-                -- Smoothly stay locked to seat ONLY when BOTH ATV AND CHARACTER are anchored
-                if anchorToggle and characterAnchorToggle and atvSeat and characterSeatOffset then
-                    local targetMiddlePos = atvSeat.Position + characterSeatOffset
-                    local deltaToSeat = (targetMiddlePos - middle.Position) * smoothFactor
-                    for _, part in ipairs(character:GetDescendants()) do
-                        if part:IsA("BasePart") then
-                            part.Position += deltaToSeat
+                            part.Anchored = false
+                            part.Velocity = currentVelocity
                         end
                     end
                 end
             end
+
+            -- Smooth follow logic
+            if anchorToggle and characterAnchorToggle and atvSeat and characterSeatOffset then
+                local targetMiddlePos = atvSeat.Position + characterSeatOffset
+                local deltaToSeat = (targetMiddlePos - middle.Position) * smoothFactor
+                for _, part in ipairs(character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Position += deltaToSeat
+                    end
+                end
+            end
         else
+            currentVelocity = Vector3.zero
             local flip2 = ClosestATV and ClosestATV.Body:FindFirstChild("Flip2")
             if flip2 then
                 flip2.Enabled = false
             end
         end
     end)
+
+    -- Deceleration moved to Heartbeat (physics thread, less lag)
+    RunService.Heartbeat:Connect(function()
+        if not Enabled or not ClosestATV then return end
+        local atvModel = ClosestATV
+
+        -- ONLY apply deceleration if NO movement keys are pressed
+        local isMoving = UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.S) or
+                         UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.D) or
+                         UserInputService:IsKeyDown(Enum.KeyCode.X) or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+        
+        if travel.Magnitude == 0 and not isMoving then
+            if not anchorToggle then
+                currentVelocity *= decelerationFactor
+                -- Stop deceleration when velocity is very low to prevent micro-lag
+                if currentVelocity.Magnitude < 0.1 then
+                    currentVelocity = Vector3.zero
+                end
+                for _, part in ipairs(atvModel:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Anchored = false
+                        part.Velocity = currentVelocity
+                    end
+                end
+            else
+                currentVelocity = Vector3.zero
+                for _, part in ipairs(atvModel:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Anchored = true
+                        part.Velocity = Vector3.zero
+                    end
+                end
+            end
+        end
+    end)
 end
 
--- Fixed Flip Bypass (targets Flip in Body folder, flip_att removed)
+-- Flip Bypass
 RunService.RenderStepped:Connect(function()
     for _, v in ipairs(Workspace:GetChildren()) do
-        local body = v:FindFirstChild("Body", true) -- Search for nested Body folder
+        local body = v:FindFirstChild("Body", true)
         if body then
             local flip = body:FindFirstChild("Flip")
             if flip and atvbypass then
@@ -297,10 +350,9 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- Keybinds (Updated: Z = ATV Anchor, K = Character Anchor)
+-- Keybinds
 UserInputService.InputBegan:Connect(function(input, isProcessed)
     if isProcessed then return end
-
     if input.KeyCode == Enum.KeyCode.L then
         toggleLongNeck()
     elseif input.KeyCode == Enum.KeyCode.F then
@@ -311,25 +363,28 @@ UserInputService.InputBegan:Connect(function(input, isProcessed)
         adjustSpeed(5)
     elseif input.KeyCode == Enum.KeyCode.N then
         adjustSpeed(-5)
-    elseif input.KeyCode == Enum.KeyCode.Z then -- Z toggles ATV anchor state
+    elseif input.KeyCode == Enum.KeyCode.Z then
         toggleATVAnchoring()
-    elseif input.KeyCode == Enum.KeyCode.K then -- K toggles character anchor state
+    elseif input.KeyCode == Enum.KeyCode.K then
         toggleCharacterAnchoring()
     end
 end)
 
--- Movement for ATV Fly
+-- Movement
 RunService.RenderStepped:Connect(function()
     if Enabled and ClosestATV then
         local cameraCFrame = Camera.CFrame
         travel = Vector3.zero
-
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then travel += cameraCFrame.LookVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.S) then travel -= cameraCFrame.LookVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.D) then travel += cameraCFrame.RightVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.A) then travel -= cameraCFrame.RightVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.X) then travel += cameraCFrame.UpVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then travel -= cameraCFrame.UpVector end
+        -- Normalize travel vector to prevent diagonal speed boost
+        if travel.Magnitude > 0 then
+            travel = travel.Unit
+        end
     else
         travel = Vector3.zero
     end
@@ -338,23 +393,14 @@ end)
 FlyHack()
 
 -- ==============================================
--- ADDITIONAL FUNCTIONS (BELOW ATV CODE)
+-- ADDITIONAL FUNCTIONS (FIXED: BIG HEAD NO-COLLIDE + RESET ON DEATH)
 -- ==============================================
-
--- External Trident Survival Script
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Efial/Chi/434704f21c527353a18f6e885e47b8117759de7d/Scripts/TridentSurvival.lua", true))()
 
--- Services for Additional Features
 local VirtualInputManager = game:GetService("VirtualInputManager")
-local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
--- Big Head Effect (Auto-Active)
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local localPlayer = Players.LocalPlayer
-local playerGui = localPlayer:WaitForChild("PlayerGui")
-
--- Big Head Effect (Auto-Active + NO-COLLIDE)
+-- Big Head Effect (Auto-Active + NO-COLLIDE + Reset on Death)
 local HeadSizeEnabled = true
 local headScale = Vector3.new(9, 9, 9)
 local headTransparency = 0.5
@@ -398,7 +444,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- CJ Button (FULLY FIXED)
+-- CJ Button
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "CJButtonGui"
 screenGui.ResetOnSpawn = false
