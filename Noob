@@ -529,3 +529,126 @@ LButton.MouseButton1Click:Connect(function()
 	task.wait(0.05)
 	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.L, false, game)
 end)
+-- ==============================================
+-- ONLY DRILL NO COOLDOWN (U Toggle)
+-- ==============================================
+local UserInputService = game:GetService("UserInputService")
+
+-- State tracking
+local features = {
+    drillNoCooldown = false
+}
+
+-- Drill No Cooldown logic
+local function toggleDrillNoCooldown()
+    features.drillNoCooldown = not features.drillNoCooldown
+    for _, v in getgc(true) do
+        if type(v) == "table" and rawget(v, "type") == "MiningDrill" then
+            v.AttackCooldown = features.drillNoCooldown and 0 or 0.15
+        end
+    end
+    print("Drill No Cooldown:", features.drillNoCooldown and "Enabled" or "Disabled")
+end
+
+-- Key toggle: U for Drill No Cooldown
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.U then
+        toggleDrillNoCooldown()
+    end
+end)
+-- ==============================================
+-- STANDALONE WASD CONTROL PANEL (ZERO SPACES + MOBILE SAFE)
+-- ==============================================
+local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
+
+local localPlayer = Players.LocalPlayer
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+-- Create control panel GUI (set DisplayOrder low to avoid covering default UI)
+local wasdGui = Instance.new("ScreenGui")
+wasdGui.Name = "WASDControlPanel"
+wasdGui.ResetOnSpawn = false
+wasdGui.DisplayOrder = 1 -- Default Roblox UI uses higher order, so joystick stays visible
+wasdGui.Parent = playerGui
+
+-- Compact frame (no extra space)
+local buttonFrame = Instance.new("Frame")
+buttonFrame.Name = "WASDFrame"
+buttonFrame.Size = UDim2.new(0, 120, 0, 100) -- Exact size for 3x40px buttons
+buttonFrame.Position = UDim2.new(0.08, 0, 0.02, 0) -- Top left
+buttonFrame.BackgroundTransparency = 1
+buttonFrame.Parent = wasdGui
+
+-- Button helper (zero gaps + mobile safe)
+local function createWASDButton(name, text, position)
+    local button = Instance.new("TextButton")
+    button.Name = name .. "Button"
+    button.Text = text
+    button.Font = Enum.Font.SourceSansBold
+    button.TextSize = 24
+    button.TextColor3 = Color3.new(1, 1, 1)
+    button.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+    button.BackgroundTransparency = 0.3
+    button.Size = UDim2.new(0, 40, 0, 50) -- Fixed size (40px wide, 50px tall)
+    button.Position = position
+    button.AnchorPoint = Vector2.new(0, 0) -- Align by top-left corner
+    button.BorderSizePixel = 0
+    button.AutoButtonColor = false
+    button.ZIndex = 2
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0.2, 0)
+    corner.Parent = button
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 2
+    stroke.Color = Color3.new(0.1, 0.1, 0.1)
+    stroke.Parent = button
+
+    -- Key logic (mobile-safe: doesn't hijack input)
+    local keyCode = Enum.KeyCode[name]
+    local isPressed = false
+
+    local function pressKey()
+        if not isPressed then
+            isPressed = true
+            VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+            button.BackgroundTransparency = 0.1
+        end
+    end
+
+    local function releaseKey()
+        if isPressed then
+            isPressed = false
+            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+            button.BackgroundTransparency = 0.3
+        end
+    end
+
+    -- Mouse/touch handlers
+    button.MouseButton1Down:Connect(pressKey)
+    button.MouseButton1Up:Connect(releaseKey)
+    button.MouseLeave:Connect(releaseKey) -- Release if finger/mouse moves off
+    button.TouchLongPress:Connect(pressKey)
+    button.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            releaseKey()
+        end
+    end)
+
+    button.Parent = buttonFrame
+    return button
+end
+
+-- Zero-space glued layout:
+-- Top row: L (0,0) → W (40,0) → F (80,0)
+-- Bottom row: A (0,50) → S (40,50) → D (80,50)
+createWASDButton("L", "L", UDim2.new(0, 0, 0, 0))    -- L (left top)
+createWASDButton("W", "W", UDim2.new(0, 40, 0, 0))   -- W (middle top, glued to L)
+createWASDButton("F", "F", UDim2.new(0, 80, 0, 0))   -- F (right top, glued to W)
+createWASDButton("A", "A", UDim2.new(0, 0, 0, 50))   -- A (left bottom, glued under L)
+createWASDButton("S", "S", UDim2.new(0, 40, 0, 50))  -- S (middle bottom, glued under W)
+createWASDButton("D", "D", UDim2.new(0, 80, 0, 50))  -- D (right bottom, glued under F)
