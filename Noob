@@ -95,22 +95,9 @@ local function fullReset()
     currentVelocity = Vector3.zero
 end
 
--- Function to reset all modified heads (called on death)
-local function resetAllHeads()
-    for head, original in pairs(v6) do
-        if head and head:IsA("BasePart") then
-            head.Size = original.Size
-            head.Transparency = original.Transparency
-            head.CanCollide = original.CanCollide
-        end
-    end
-    v6 = {} -- Clear tracking table
-end
-
--- Death Handler (Reset big heads on death)
+-- Death Handler
 local function onCharacterDeath()
     fullReset()
-    resetAllHeads()
 end
 
 -- Spawn Handler
@@ -393,56 +380,12 @@ end)
 FlyHack()
 
 -- ==============================================
--- ADDITIONAL FUNCTIONS (FIXED: BIG HEAD NO-COLLIDE + RESET ON DEATH)
+-- ADDITIONAL FUNCTIONS
 -- ==============================================
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Efial/Chi/434704f21c527353a18f6e885e47b8117759de7d/Scripts/TridentSurvival.lua", true))()
 
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local playerGui = localPlayer:WaitForChild("PlayerGui")
-
--- Big Head Effect (Auto-Active + NO-COLLIDE + Reset on Death)
-local HeadSizeEnabled = true
-local headScale = Vector3.new(9, 9, 9)
-local headTransparency = 0.5
-local v4 = 0
-local v5 = 25
-local v6 = {}
-
-local function applyHeadChanges(v7)
-    local l_Head_0 = v7:FindFirstChild("Head")
-    if l_Head_0 and l_Head_0:IsA("BasePart") then
-        if HeadSizeEnabled then
-            if not v6[l_Head_0] then
-                v6[l_Head_0] = {
-                    Size = l_Head_0.Size,
-                    Transparency = l_Head_0.Transparency,
-                    CanCollide = l_Head_0.CanCollide -- Save original collision state
-                }
-            end
-            l_Head_0.Size = headScale
-            l_Head_0.Transparency = headTransparency
-            l_Head_0.CanCollide = false -- Make big head non-colliding
-        elseif v6[l_Head_0] then
-            l_Head_0.Size = v6[l_Head_0].Size
-            l_Head_0.Transparency = v6[l_Head_0].Transparency
-            l_Head_0.CanCollide = v6[l_Head_0].CanCollide -- Restore original collision
-            v6[l_Head_0] = nil
-        end
-    end
-end
-
--- Big Head Update Loop
-RunService.RenderStepped:Connect(function()
-    v4 = v4 + 1
-    if v5 <= v4 then
-        v4 = 0
-        for _, v11 in pairs(workspace:GetChildren()) do
-            if v11:IsA("Model") and v11 ~= localPlayer.Character then
-                applyHeadChanges(v11)
-            end
-        end
-    end
-end)
 
 -- CJ Button
 local screenGui = Instance.new("ScreenGui")
