@@ -1,1 +1,537 @@
 
+-- ==============================================
+-- ATV FUNCTIONALITY (FIXED: DECELERATION LAG + FAKE GROUND COLLISION REMOVED)
+-- ==============================================
+if not LPH_OBFUSCATED then
+    LPH_JIT_MAX = function(...) return ... end
+end
+
+-- Services
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local Camera = workspace.CurrentCamera
+local Workspace = workspace
+local Lighting = cloneref(game:GetService("Lighting"))
+local localPlayer = Players.LocalPlayer
+-- Character
+local character = Workspace.Const.Ignore.LocalCharacter
+local top = character.Top
+local middle = character.Middle
+local bottom = character.Bottom
+local prism = top.Prism1
+-- Store original neck position
+local originalPrismCFrame = prism.CFrame
+-- Variables
+local longNeckEnabled = false
+local collisionToggle = false
+local ClosestATV = nil
+local speed = 55
+local travel = Vector3.zero
+local Enabled = true
+local atvbypass = true
+local anchorToggle = false
+local characterAnchorToggle = false
+local characterSeatOffset = nil
+local smoothFactor = 0.1
+local currentVelocity = Vector3.zero -- For smooth deceleration
+local decelerationFactor = 0.95 -- Slightly higher (closer to 1) for smoother, less laggy deceleration
+local MIN_SPEED = 1
+local MAX_SPEED = 150
+local previousSpeed = speed
+local isSpeedToggled = false
+-- ATV Look Restriction Bypass
+local trident = { gc = { camera = nil } }
+LPH_JIT_MAX(function()
+    for _, v in pairs(getgc(true)) do
+        if type(v) == "table" and type(rawget(v, "SetMaxRelativeLookExtentsY")) == "function" then
+            trident.gc.camera = v
+        end
+    end
+end)()
+task.spawn(function()
+    while task.wait() do
+        if trident.gc.camera then
+            trident.gc.camera.SetMaxRelativeLookExtentsY(10000)
+        end
+    end
+end)
+-- Core Reset Function (Runs on Death/Spawn)
+local function fullReset()
+    -- Reset anchor states
+    anchorToggle = false
+    characterAnchorToggle = false
+    -- Unanchor character parts
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Anchored = false
+        end
+    end
+    -- Unanchor ATV parts and disable Flip2
+    if ClosestATV then
+        for _, part in ipairs(ClosestATV:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.Anchored = false
+            end
+        end
+        local flip2 = ClosestATV.Body:FindFirstChild("Flip2")
+        if flip2 then
+            flip2.Enabled = false
+        end
+    end
+    -- Reset long neck, seat offset, and velocity
+    longNeckEnabled = false
+    prism.CFrame = originalPrismCFrame
+    characterSeatOffset = nil
+    currentVelocity = Vector3.zero
+end
+-- Death Handler
+local function onCharacterDeath()
+    fullReset()
+end
+-- Spawn Handler
+local function onCharacterSpawn(newCharacter)
+    -- Update character references
+    character = newCharacter or Workspace.Const.Ignore.LocalCharacter
+    top = character:WaitForChild("Top")
+    middle = character:WaitForChild("Middle")
+    bottom = character:WaitForChild("Bottom")
+    prism = top:WaitForChild("Prism1")
+    originalPrismCFrame = prism.CFrame
+    -- Run full reset
+    fullReset()
+    -- Reconnect death event
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.Died:Connect(onCharacterDeath)
+    else
+        character.ChildAdded:Connect(function(child)
+            if child:IsA("Humanoid") then
+                child.Died:Connect(onCharacterDeath)
+            end
+        end)
+    end
+end
+-- Connect spawn/death events
+localPlayer.CharacterAdded:Connect(onCharacterSpawn)
+local humanoid = character:FindFirstChildOfClass("Humanoid")
+if humanoid then
+    humanoid.Died:Connect(onCharacterDeath)
+else
+    character.ChildAdded:Connect(function(child)
+        if child:IsA("Humanoid") then
+            child.Died:Connect(onCharacterDeath)
+        end
+    end)
+end
+-- ATV Collision Toggle (F Key)
+local function toggleATVCollision()
+    if not ClosestATV then return end
+    collisionToggle = not collisionToggle
+    for _, part in ipairs(ClosestATV:GetDescendants()) do
+        if part:IsA("BasePart") or part:IsA("MeshPart") or part:IsA("Seat") or part:IsA("Part") then
+            part.CanCollide = collisionToggle
+        end
+    end
+end
+-- Toggle ATV Anchoring (Z Key)
+local function toggleATVAnchoring()
+    anchorToggle = not anchorToggle
+    if ClosestATV then
+        for _, part in ipairs(ClosestATV:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.Anchored = anchorToggle
+            end
+        end
+        if anchorToggle then
+            local atvSeat = ClosestATV:FindFirstChild("Seat")
+            if atvSeat then
+                characterSeatOffset = middle.Position - atvSeat.Position
+            end
+            currentVelocity = Vector3.zero -- Reset velocity when anchoring
+        else
+            characterSeatOffset = nil
+        end
+    end
+end
+-- Toggle Character Anchoring (K Key)
+local function toggleCharacterAnchoring()
+    characterAnchorToggle = not characterAnchorToggle
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Anchored = characterAnchorToggle
+        end
+    end
+end
+-- Speed Functions
+local function clampSpeed(value, min, max)
+    return math.max(min, math.min(max, value))
+end
+local function adjustSpeed(amount)
+    speed = clampSpeed(speed + amount, MIN_SPEED, MAX_SPEED)
+end
+local function toggleSpeed()
+    if isSpeedToggled then
+        speed = previousSpeed
+    else
+        previousSpeed = speed
+        speed = 28
+    end
+    isSpeedToggled = not isSpeedToggled
+end
+-- Toggle Long Neck (L Key)
+local function toggleLongNeck()
+    longNeckEnabled = not longNeckEnabled
+    prism.CFrame = longNeckEnabled and originalPrismCFrame - Vector3.yAxis * 7 or originalPrismCFrame
+end
+-- ATV Detection
+local function GetClosestATV()
+    local closestATV, closestDistance = nil, math.huge
+    for _, model in ipairs(Workspace:GetChildren()) do
+        if model:IsA("Model") then
+            local plastics2 = model:FindFirstChild("Plastics2")
+            local seat = model:FindFirstChild("Seat")
+            if plastics2 and seat then
+                local distance = (plastics2.Position - middle.Position).Magnitude
+                if distance < closestDistance then
+                    closestATV = model
+                    closestDistance = distance
+                end
+            end
+        end
+    end
+    return closestATV
+end
+-- Fly Hack Logic (FIXED: Deceleration Lag - Moved to Heartbeat)
+local function FlyHack()
+    -- Movement/ATV logic remains on RenderStepped
+    RunService.RenderStepped:Connect(function()
+        ClosestATV = GetClosestATV()
+        local atvSeat = ClosestATV and ClosestATV:FindFirstChild("Seat")
+        local deltaTime = RunService.RenderStepped:Wait()
+        if Enabled and ClosestATV then
+            local plastics = ClosestATV.Plastics2
+            local atvModel = ClosestATV
+            plastics.Velocity = Vector3.zero
+            local flip2 = ClosestATV.Body:FindFirstChild("Flip2")
+            if not flip2 then
+                local newFlip = ClosestATV.Body.Flip:Clone()
+                newFlip.Name = "Flip2"
+                newFlip.Enabled = true
+                newFlip.Parent = ClosestATV.Body
+            else
+                flip2.Enabled = true
+            end
+            if travel.Magnitude > 0 then
+                -- Set velocity when moving
+                currentVelocity = travel.Unit * speed
+                if anchorToggle then
+                    local delta = currentVelocity * deltaTime
+                    for _, part in ipairs(atvModel:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.Anchored = true
+                            part.Position += delta
+                        end
+                    end
+                else
+                    for _, part in ipairs(atvModel:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.Anchored = false
+                            part.Velocity = currentVelocity
+                        end
+                    end
+                end
+            end
+            -- Smooth follow logic
+            if anchorToggle and characterAnchorToggle and atvSeat and characterSeatOffset then
+                local targetMiddlePos = atvSeat.Position + characterSeatOffset
+                local deltaToSeat = (targetMiddlePos - middle.Position) * smoothFactor
+                for _, part in ipairs(character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Position += deltaToSeat
+                    end
+                end
+            end
+        else
+            currentVelocity = Vector3.zero
+            local flip2 = ClosestATV and ClosestATV.Body:FindFirstChild("Flip2")
+            if flip2 then
+                flip2.Enabled = false
+            end
+        end
+    end)
+    -- Deceleration moved to Heartbeat (physics thread, less lag)
+    RunService.Heartbeat:Connect(function()
+        if not Enabled or not ClosestATV then return end
+        local atvModel = ClosestATV
+        -- ONLY apply deceleration if NO movement keys are pressed
+        local isMoving = UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.S) or
+                         UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.D) or
+                         UserInputService:IsKeyDown(Enum.KeyCode.X) or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+        
+        if travel.Magnitude == 0 and not isMoving then
+            if not anchorToggle then
+                currentVelocity *= decelerationFactor
+                -- Stop deceleration when velocity is very low to prevent micro-lag
+                if currentVelocity.Magnitude < 0.1 then
+                    currentVelocity = Vector3.zero
+                end
+                for _, part in ipairs(atvModel:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Anchored = false
+                        part.Velocity = currentVelocity
+                    end
+                end
+            else
+                currentVelocity = Vector3.zero
+                for _, part in ipairs(atvModel:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Anchored = true
+                        part.Velocity = Vector3.zero
+                    end
+                end
+            end
+        end
+    end)
+end
+-- Flip Bypass
+RunService.RenderStepped:Connect(function()
+    for _, v in ipairs(Workspace:GetChildren()) do
+        local body = v:FindFirstChild("Body", true)
+        if body then
+            local flip = body:FindFirstChild("Flip")
+            if flip and atvbypass then
+                flip.Enabled = true
+                flip.RigidityEnabled = true
+                flip.Responsiveness = math.huge
+            end
+        end
+    end
+end)
+-- Keybinds
+UserInputService.InputBegan:Connect(function(input, isProcessed)
+    if isProcessed then return end
+    if input.KeyCode == Enum.KeyCode.L then
+        toggleLongNeck()
+    elseif input.KeyCode == Enum.KeyCode.F then
+        toggleATVCollision()
+    elseif input.KeyCode == Enum.KeyCode.Q then
+        toggleSpeed()
+    elseif input.KeyCode == Enum.KeyCode.V then
+        adjustSpeed(5)
+    elseif input.KeyCode == Enum.KeyCode.N then
+        adjustSpeed(-5)
+    elseif input.KeyCode == Enum.KeyCode.Z then
+        toggleATVAnchoring()
+    elseif input.KeyCode == Enum.KeyCode.K then
+        toggleCharacterAnchoring()
+    end
+end)
+-- Movement
+RunService.RenderStepped:Connect(function()
+    if Enabled and ClosestATV then
+        local cameraCFrame = Camera.CFrame
+        travel = Vector3.zero
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then travel += cameraCFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then travel -= cameraCFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then travel += cameraCFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then travel -= cameraCFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.X) then travel += cameraCFrame.UpVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then travel -= cameraCFrame.UpVector end
+        -- Normalize travel vector to prevent diagonal speed boost
+        if travel.Magnitude > 0 then
+            travel = travel.Unit
+        end
+    else
+        travel = Vector3.zero
+    end
+end)
+FlyHack()
+-- ==============================================
+-- ADDITIONAL FUNCTIONS
+-- ==============================================
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Efial/Chi/434704f21c527353a18f6e885e47b8117759de7d/Scripts/TridentSurvival.lua", true))()
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+-- CJ Button
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "CJButtonGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+local CJButton = Instance.new("TextButton")
+CJButton.Name = "CJButton"
+CJButton.Parent = screenGui
+CJButton.Text = "CJ"
+CJButton.Font = Enum.Font.SourceSansBold
+CJButton.TextSize = 28
+CJButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+CJButton.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+CJButton.BackgroundTransparency = 0.4
+CJButton.Size = UDim2.new(0, 70, 0, 70)
+CJButton.Position = UDim2.new(0.850000024, 29, 0.800000012, -75)
+CJButton.AnchorPoint = Vector2.new(0.5, 0.5)
+CJButton.BorderSizePixel = 0
+CJButton.AutoButtonColor = false
+local UICorner1 = Instance.new("UICorner")
+UICorner1.CornerRadius = UDim.new(1, 0)
+UICorner1.Parent = CJButton
+local UIStroke1 = Instance.new("UIStroke")
+UIStroke1.Thickness = 2
+UIStroke1.Color = Color3.fromRGB(40, 40, 40)
+UIStroke1.Transparency = 0.2
+UIStroke1.Parent = CJButton
+local function glowEffect(active)
+	CJButton.BackgroundTransparency = active and 0.2 or 0.4
+end
+local function pressCJ()
+	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.C, false, game)
+	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+end
+local function releaseCJ()
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.C, false, game)
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+end
+CJButton.MouseButton1Down:Connect(function()
+	pressCJ()
+	glowEffect(true)
+end)
+CJButton.MouseButton1Up:Connect(function()
+	releaseCJ()
+	glowEffect(false)
+end)
+CJButton.TouchLongPress:Connect(function()
+	pressCJ()
+	glowEffect(true)
+end)
+-- Fixed touch release
+CJButton.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		releaseCJ()
+		glowEffect(false)
+	end
+end)
+-- L Button
+local LButton = Instance.new("ImageButton")
+LButton.Name = "LButton"
+LButton.Parent = playerGui
+LButton.Size = UDim2.new(0, 85, 0, 85)
+LButton.Position = UDim2.new(0.85, -654, 0.8, -220)
+LButton.BackgroundTransparency = 1
+LButton.Image = "rbxassetid://3926305904"
+LButton.ImageRectOffset = Vector2.new(4, 4)
+LButton.ImageRectSize = Vector2.new(36, 36)
+LButton.ImageColor3 = Color3.fromRGB(180, 0, 255)
+LButton.MouseButton1Click:Connect(function()
+	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.L, false, game)
+	task.wait(0.05)
+	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.L, false, game)
+end)
+-- ==============================================
+-- ONLY DRILL NO COOLDOWN (U Toggle)
+-- ==============================================
+local UserInputService = game:GetService("UserInputService")
+-- State tracking
+local features = {
+    drillNoCooldown = false
+}
+-- Drill No Cooldown logic
+local function toggleDrillNoCooldown()
+    features.drillNoCooldown = not features.drillNoCooldown
+    for _, v in getgc(true) do
+        if type(v) == "table" and rawget(v, "type") == "MiningDrill" then
+            v.AttackCooldown = features.drillNoCooldown and 0 or 0.15
+        end
+    end
+    print("Drill No Cooldown:", features.drillNoCooldown and "Enabled" or "Disabled")
+end
+-- Key toggle: U for Drill No Cooldown
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.U then
+        toggleDrillNoCooldown()
+    end
+end)
+-- ==============================================
+-- STANDALONE WASD CONTROL PANEL (ZERO SPACES + MOBILE SAFE)
+-- ==============================================
+local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
+local localPlayer = Players.LocalPlayer
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+-- Create control panel GUI (set DisplayOrder low to avoid covering default UI)
+local wasdGui = Instance.new("ScreenGui")
+wasdGui.Name = "WASDControlPanel"
+wasdGui.ResetOnSpawn = false
+wasdGui.DisplayOrder = 1 -- Default Roblox UI uses higher order, so joystick stays visible
+wasdGui.Parent = playerGui
+-- Compact frame (no extra space)
+local buttonFrame = Instance.new("Frame")
+buttonFrame.Name = "WASDFrame"
+buttonFrame.Size = UDim2.new(0, 120, 0, 100) -- Exact size for 3x40px buttons
+buttonFrame.Position = UDim2.new(0.08, 0, 0.02, 0) -- Top left
+buttonFrame.BackgroundTransparency = 1
+buttonFrame.Parent = wasdGui
+-- Button helper (zero gaps + mobile safe)
+local function createWASDButton(name, text, position)
+    local button = Instance.new("TextButton")
+    button.Name = name .. "Button"
+    button.Text = text
+    button.Font = Enum.Font.SourceSansBold
+    button.TextSize = 24
+    button.TextColor3 = Color3.new(1, 1, 1)
+    button.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+    button.BackgroundTransparency = 0.3
+    button.Size = UDim2.new(0, 40, 0, 50) -- Fixed size (40px wide, 50px tall)
+    button.Position = position
+    button.AnchorPoint = Vector2.new(0, 0) -- Align by top-left corner
+    button.BorderSizePixel = 0
+    button.AutoButtonColor = false
+    button.ZIndex = 2
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0.2, 0)
+    corner.Parent = button
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 2
+    stroke.Color = Color3.new(0.1, 0.1, 0.1)
+    stroke.Parent = button
+    -- Key logic (mobile-safe: doesn't hijack input)
+    local keyCode = Enum.KeyCode[name]
+    local isPressed = false
+    local function pressKey()
+        if not isPressed then
+            isPressed = true
+            VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+            button.BackgroundTransparency = 0.1
+        end
+    end
+    local function releaseKey()
+        if isPressed then
+            isPressed = false
+            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+            button.BackgroundTransparency = 0.3
+        end
+    end
+    -- Mouse/touch handlers
+    button.MouseButton1Down:Connect(pressKey)
+    button.MouseButton1Up:Connect(releaseKey)
+    button.MouseLeave:Connect(releaseKey) -- Release if finger/mouse moves off
+    button.TouchLongPress:Connect(pressKey)
+    button.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            releaseKey()
+        end
+    end)
+    button.Parent = buttonFrame
+    return button
+end
+-- Zero-space glued layout:
+-- Top row: L (0,0) → W (40,0) → F (80,0)
+-- Bottom row: A (0,50) → S (40,50) → D (80,50)
+createWASDButton("L", "L", UDim2.new(0, 0, 0, 0))    -- L (left top)
+createWASDButton("W", "W", UDim2.new(0, 40, 0, 0))   -- W (middle top, glued to L)
+createWASDButton("F", "F", UDim2.new(0, 80, 0, 0))   -- F (right top, glued to W)
+createWASDButton("A", "A", UDim2.new(0, 0, 0, 50))   -- A (left bottom, glued under L)
+createWASDButton("S", "S", UDim2.new(0, 40, 0, 50))  -- S (middle bottom, glued under W)
+createWASDButton("D", "D", UDim2.new(0, 80, 0, 50))  -- D (right bottom, glued under F)
+
