@@ -459,21 +459,32 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
--- Create control panel GUI (set DisplayOrder low to avoid covering default UI)
+
+-- Create control panel GUI
 local wasdGui = Instance.new("ScreenGui")
 wasdGui.Name = "WASDControlPanel"
 wasdGui.ResetOnSpawn = false
-wasdGui.DisplayOrder = 1 -- Default Roblox UI uses higher order, so joystick stays visible
+wasdGui.DisplayOrder = 1
 wasdGui.Parent = playerGui
--- Compact frame (no extra space)
-local buttonFrame = Instance.new("Frame")
-buttonFrame.Name = "WASDFrame"
-buttonFrame.Size = UDim2.new(0, 120, 0, 100) -- Exact size for 3x40px buttons
-buttonFrame.Position = UDim2.new(0.08, 0, 0.02, 0) -- Top left
-buttonFrame.BackgroundTransparency = 1
-buttonFrame.Parent = wasdGui
--- Button helper (zero gaps + mobile safe)
-local function createWASDButton(name, text, position)
+
+-- Compact frame for WASD and L/F
+local buttonFrameLeft = Instance.new("Frame")
+buttonFrameLeft.Name = "WASDFrameLeft"
+buttonFrameLeft.Size = UDim2.new(0, 120, 0, 100)
+buttonFrameLeft.Position = UDim2.new(0.08, 0, 0.02, 0)
+buttonFrameLeft.BackgroundTransparency = 1
+buttonFrameLeft.Parent = wasdGui
+
+-- Compact frame for U/Q/Z/K
+local buttonFrameRight = Instance.new("Frame")
+buttonFrameRight.Name = "WASDFrameRight"
+buttonFrameRight.Size = UDim2.new(0, 80, 0, 100) -- Adjusted width
+buttonFrameRight.Position = UDim2.new(0.82, 0, -0.02, 0) -- Adjusted position to the right and to the top
+buttonFrameRight.BackgroundTransparency = 1
+buttonFrameRight.Parent = wasdGui
+
+-- Button helper function
+local function createWASDButton(name, text, position, parentFrame)
     local button = Instance.new("TextButton")
     button.Name = name .. "Button"
     button.Text = text
@@ -482,9 +493,9 @@ local function createWASDButton(name, text, position)
     button.TextColor3 = Color3.new(1, 1, 1)
     button.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
     button.BackgroundTransparency = 0.3
-    button.Size = UDim2.new(0, 40, 0, 50) -- Fixed size (40px wide, 50px tall)
+    button.Size = UDim2.new(0, 40, 0, 50)
     button.Position = position
-    button.AnchorPoint = Vector2.new(0, 0) -- Align by top-left corner
+    button.AnchorPoint = Vector2.new(0, 0)
     button.BorderSizePixel = 0
     button.AutoButtonColor = false
     button.ZIndex = 2
@@ -495,7 +506,7 @@ local function createWASDButton(name, text, position)
     stroke.Thickness = 2
     stroke.Color = Color3.new(0.1, 0.1, 0.1)
     stroke.Parent = button
-    -- Key logic (mobile-safe: doesn't hijack input)
+
     local keyCode = Enum.KeyCode[name]
     local isPressed = false
     local function pressKey()
@@ -512,26 +523,30 @@ local function createWASDButton(name, text, position)
             button.BackgroundTransparency = 0.3
         end
     end
-    -- Mouse/touch handlers
+
     button.MouseButton1Down:Connect(pressKey)
     button.MouseButton1Up:Connect(releaseKey)
-    button.MouseLeave:Connect(releaseKey) -- Release if finger/mouse moves off
+    button.MouseLeave:Connect(releaseKey)
     button.TouchLongPress:Connect(pressKey)
     button.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
             releaseKey()
         end
     end)
-    button.Parent = buttonFrame
+    button.Parent = parentFrame
     return button
 end
--- Zero-space glued layout:
--- Top row: L (0,0) → W (40,0) → F (80,0)
--- Bottom row: A (0,50) → S (40,50) → D (80,50)
-createWASDButton("L", "L", UDim2.new(0, 0, 0, 0))    -- L (left top)
-createWASDButton("W", "W", UDim2.new(0, 40, 0, 0))   -- W (middle top, glued to L)
-createWASDButton("F", "F", UDim2.new(0, 80, 0, 0))   -- F (right top, glued to W)
-createWASDButton("A", "A", UDim2.new(0, 0, 0, 50))   -- A (left bottom, glued under L)
-createWASDButton("S", "S", UDim2.new(0, 40, 0, 50))  -- S (middle bottom, glued under W)
-createWASDButton("D", "D", UDim2.new(0, 80, 0, 50))  -- D (right bottom, glued under F)
 
+-- Zero-space glued layout for left side:
+createWASDButton("L", "L", UDim2.new(0, 0, 0, 0), buttonFrameLeft)
+createWASDButton("W", "W", UDim2.new(0, 40, 0, 0), buttonFrameLeft)
+createWASDButton("F", "F", UDim2.new(0, 80, 0, 0), buttonFrameLeft)
+createWASDButton("A", "A", UDim2.new(0, 0, 0, 50), buttonFrameLeft)
+createWASDButton("S", "S", UDim2.new(0, 40, 0, 50), buttonFrameLeft)
+createWASDButton("D", "D", UDim2.new(0, 80, 0, 50), buttonFrameLeft)
+
+-- Layout for right side (U, Q, Z, K): Two buttons per row
+createWASDButton("U", "U", UDim2.new(0, 0, 0, 0), buttonFrameRight) -- Top Left
+createWASDButton("Q", "Q", UDim2.new(0, 40, 0, 0), buttonFrameRight) -- Top Right
+createWASDButton("Z", "Z", UDim2.new(0, 0, 0, 50), buttonFrameRight) -- Bottom Left
+createWASDButton("K", "K", UDim2.new(0, 40, 0, 50), buttonFrameRight) -- Bottom Right
