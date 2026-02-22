@@ -1,6 +1,5 @@
-
 -- ==============================================
--- ATV FUNCTIONALITY (FIXED: DECELERATION LAG + FAKE GROUND COLLISION REMOVED)
+-- VEHICLE FLY FUNCTIONALITY (ATV + CAR SUPPORT)
 -- ==============================================
 if not LPH_OBFUSCATED then
     LPH_JIT_MAX = function(...) return ... end
@@ -14,18 +13,21 @@ local Camera = workspace.CurrentCamera
 local Workspace = workspace
 local Lighting = cloneref(game:GetService("Lighting"))
 local localPlayer = Players.LocalPlayer
+
 -- Character
 local character = Workspace.Const.Ignore.LocalCharacter
 local top = character.Top
 local middle = character.Middle
 local bottom = character.Bottom
 local prism = top.Prism1
+
 -- Store original neck position
 local originalPrismCFrame = prism.CFrame
+
 -- Variables
 local longNeckEnabled = false
 local collisionToggle = false
-local ClosestATV = nil
+local ClosestVehicle = nil
 local speed = 55
 local travel = Vector3.zero
 local Enabled = true
@@ -34,13 +36,14 @@ local anchorToggle = false
 local characterAnchorToggle = false
 local characterSeatOffset = nil
 local smoothFactor = 0.1
-local currentVelocity = Vector3.zero -- For smooth deceleration
-local decelerationFactor = 0.95 -- Slightly higher (closer to 1) for smoother, less laggy deceleration
+local currentVelocity = Vector3.zero
+local decelerationFactor = 0.95
 local MIN_SPEED = 1
 local MAX_SPEED = 150
 local previousSpeed = speed
 local isSpeedToggled = false
--- ATV Look Restriction Bypass
+
+-- Vehicle Look Restriction Bypass
 local trident = { gc = { camera = nil } }
 LPH_JIT_MAX(function()
     for _, v in pairs(getgc(true)) do
@@ -49,6 +52,7 @@ LPH_JIT_MAX(function()
         end
     end
 end)()
+
 task.spawn(function()
     while task.wait() do
         if trident.gc.camera then
@@ -56,51 +60,47 @@ task.spawn(function()
         end
     end
 end)
--- Core Reset Function (Runs on Death/Spawn)
+
+-- Core Reset Function
 local function fullReset()
-    -- Reset anchor states
     anchorToggle = false
     characterAnchorToggle = false
-    -- Unanchor character parts
     for _, part in ipairs(character:GetDescendants()) do
         if part:IsA("BasePart") then
             part.Anchored = false
         end
     end
-    -- Unanchor ATV parts and disable Flip2
-    if ClosestATV then
-        for _, part in ipairs(ClosestATV:GetDescendants()) do
+    if ClosestVehicle then
+        for _, part in ipairs(ClosestVehicle:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.Anchored = false
             end
         end
-        local flip2 = ClosestATV.Body:FindFirstChild("Flip2")
+        local flip2 = ClosestVehicle.Body and ClosestVehicle.Body:FindFirstChild("Flip2")
         if flip2 then
             flip2.Enabled = false
         end
     end
-    -- Reset long neck, seat offset, and velocity
     longNeckEnabled = false
     prism.CFrame = originalPrismCFrame
     characterSeatOffset = nil
     currentVelocity = Vector3.zero
 end
+
 -- Death Handler
 local function onCharacterDeath()
     fullReset()
 end
+
 -- Spawn Handler
 local function onCharacterSpawn(newCharacter)
-    -- Update character references
     character = newCharacter or Workspace.Const.Ignore.LocalCharacter
     top = character:WaitForChild("Top")
     middle = character:WaitForChild("Middle")
     bottom = character:WaitForChild("Bottom")
     prism = top:WaitForChild("Prism1")
     originalPrismCFrame = prism.CFrame
-    -- Run full reset
     fullReset()
-    -- Reconnect death event
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     if humanoid then
         humanoid.Died:Connect(onCharacterDeath)
@@ -112,7 +112,8 @@ local function onCharacterSpawn(newCharacter)
         end)
     end
 end
--- Connect spawn/death events
+
+-- Connect events
 localPlayer.CharacterAdded:Connect(onCharacterSpawn)
 local humanoid = character:FindFirstChildOfClass("Humanoid")
 if humanoid then
@@ -124,36 +125,59 @@ else
         end
     end)
 end
--- ATV Collision Toggle (F Key)
-local function toggleATVCollision()
-    if not ClosestATV then return end
+
+-- Vehicle Detection (ATV + CAR) - FIXED WITH RECURSIVE SEARCH
+local function GetClosestVehicle()
+    local closest, closestDistance = nil, math.huge
+    for _, model in ipairs(Workspace:GetChildren()) do
+        if model:IsA("Model") then
+            -- Search for seat recursively (handles nested seats in Body for Cars)
+            local seat = model:FindFirstChild("Seat", true)
+            -- Look for main part
+            local mainPart = model:FindFirstChild("Body") or model:FindFirstChild("Plastics2")
+            if seat and mainPart then
+                local distance = (mainPart.Position - middle.Position).Magnitude
+                if distance < closestDistance and distance < 45 then
+                    closest = model
+                    closestDistance = distance
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- Toggle Vehicle Collision (F Key)
+local function toggleVehicleCollision()
+    if not ClosestVehicle then return end
     collisionToggle = not collisionToggle
-    for _, part in ipairs(ClosestATV:GetDescendants()) do
-        if part:IsA("BasePart") or part:IsA("MeshPart") or part:IsA("Seat") or part:IsA("Part") then
+    for _, part in ipairs(ClosestVehicle:GetDescendants()) do
+        if part:IsA("BasePart") or part:IsA("MeshPart") or part:IsA("Seat") then
             part.CanCollide = collisionToggle
         end
     end
 end
--- Toggle ATV Anchoring (Z Key)
-local function toggleATVAnchoring()
+
+-- Toggle Vehicle Anchoring (Z Key) - FIXED WITH RECURSIVE SEARCH
+local function toggleVehicleAnchoring()
     anchorToggle = not anchorToggle
-    if ClosestATV then
-        for _, part in ipairs(ClosestATV:GetDescendants()) do
+    if ClosestVehicle then
+        for _, part in ipairs(ClosestVehicle:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.Anchored = anchorToggle
             end
         end
-        if anchorToggle then
-            local atvSeat = ClosestATV:FindFirstChild("Seat")
-            if atvSeat then
-                characterSeatOffset = middle.Position - atvSeat.Position
-            end
-            currentVelocity = Vector3.zero -- Reset velocity when anchoring
+        -- Search for seat recursively (handles nested seats in Body for Cars)
+        local vehicleSeat = ClosestVehicle:FindFirstChild("Seat", true)
+        if anchorToggle and vehicleSeat then
+            characterSeatOffset = middle.Position - vehicleSeat.Position
+            currentVelocity = Vector3.zero
         else
             characterSeatOffset = nil
         end
     end
 end
+
 -- Toggle Character Anchoring (K Key)
 local function toggleCharacterAnchoring()
     characterAnchorToggle = not characterAnchorToggle
@@ -163,13 +187,16 @@ local function toggleCharacterAnchoring()
         end
     end
 end
+
 -- Speed Functions
 local function clampSpeed(value, min, max)
     return math.max(min, math.min(max, value))
 end
+
 local function adjustSpeed(amount)
     speed = clampSpeed(speed + amount, MIN_SPEED, MAX_SPEED)
 end
+
 local function toggleSpeed()
     if isSpeedToggled then
         speed = previousSpeed
@@ -179,62 +206,56 @@ local function toggleSpeed()
     end
     isSpeedToggled = not isSpeedToggled
 end
+
 -- Toggle Long Neck (L Key)
 local function toggleLongNeck()
     longNeckEnabled = not longNeckEnabled
     prism.CFrame = longNeckEnabled and originalPrismCFrame - Vector3.yAxis * 7 or originalPrismCFrame
 end
--- ATV Detection
-local function GetClosestATV()
-    local closestATV, closestDistance = nil, math.huge
-    for _, model in ipairs(Workspace:GetChildren()) do
-        if model:IsA("Model") then
-            local plastics2 = model:FindFirstChild("Plastics2")
-            local seat = model:FindFirstChild("Seat")
-            if plastics2 and seat then
-                local distance = (plastics2.Position - middle.Position).Magnitude
-                if distance < closestDistance then
-                    closestATV = model
-                    closestDistance = distance
-                end
-            end
-        end
-    end
-    return closestATV
-end
--- Fly Hack Logic (FIXED: Deceleration Lag - Moved to Heartbeat)
+
+-- Fly Hack Logic
 local function FlyHack()
-    -- Movement/ATV logic remains on RenderStepped
-    RunService.RenderStepped:Connect(function()
-        ClosestATV = GetClosestATV()
-        local atvSeat = ClosestATV and ClosestATV:FindFirstChild("Seat")
+    -- Movement/RenderStepped
+    local renderConnection
+    renderConnection = RunService.RenderStepped:Connect(function()
+        ClosestVehicle = GetClosestVehicle()
+        -- Search for seat recursively (handles nested seats in Body for Cars)
+        local vehicleSeat = ClosestVehicle and ClosestVehicle:FindFirstChild("Seat", true)
+        local mainPart = ClosestVehicle and (ClosestVehicle:FindFirstChild("Body") or ClosestVehicle:FindFirstChild("Plastics2"))
         local deltaTime = RunService.RenderStepped:Wait()
-        if Enabled and ClosestATV then
-            local plastics = ClosestATV.Plastics2
-            local atvModel = ClosestATV
-            plastics.Velocity = Vector3.zero
-            local flip2 = ClosestATV.Body:FindFirstChild("Flip2")
+        
+        if Enabled and ClosestVehicle and mainPart then
+            -- Zero main part velocity
+            mainPart.Velocity = Vector3.zero
+            
+            -- Flip2 handling
+            local bodyPart = ClosestVehicle:FindFirstChild("Body")
+            local flip2 = bodyPart and bodyPart:FindFirstChild("Flip2") or mainPart:FindFirstChild("Flip2")
             if not flip2 then
-                local newFlip = ClosestATV.Body.Flip:Clone()
-                newFlip.Name = "Flip2"
-                newFlip.Enabled = true
-                newFlip.Parent = ClosestATV.Body
+                local sourceFlip = bodyPart and bodyPart:FindFirstChild("Flip") or mainPart:FindFirstChild("Flip")
+                if sourceFlip then
+                    local newFlip = sourceFlip:Clone()
+                    newFlip.Name = "Flip2"
+                    newFlip.Enabled = true
+                    newFlip.Parent = bodyPart or mainPart
+                end
             else
                 flip2.Enabled = true
             end
+            
             if travel.Magnitude > 0 then
-                -- Set velocity when moving
                 currentVelocity = travel.Unit * speed
+                local vehicleModel = ClosestVehicle
                 if anchorToggle then
                     local delta = currentVelocity * deltaTime
-                    for _, part in ipairs(atvModel:GetDescendants()) do
+                    for _, part in ipairs(vehicleModel:GetDescendants()) do
                         if part:IsA("BasePart") then
                             part.Anchored = true
                             part.Position += delta
                         end
                     end
                 else
-                    for _, part in ipairs(atvModel:GetDescendants()) do
+                    for _, part in ipairs(vehicleModel:GetDescendants()) do
                         if part:IsA("BasePart") then
                             part.Anchored = false
                             part.Velocity = currentVelocity
@@ -242,9 +263,10 @@ local function FlyHack()
                     end
                 end
             end
-            -- Smooth follow logic
-            if anchorToggle and characterAnchorToggle and atvSeat and characterSeatOffset then
-                local targetMiddlePos = atvSeat.Position + characterSeatOffset
+            
+            -- Smooth character follow
+            if anchorToggle and characterAnchorToggle and vehicleSeat and characterSeatOffset then
+                local targetMiddlePos = vehicleSeat.Position + characterSeatOffset
                 local deltaToSeat = (targetMiddlePos - middle.Position) * smoothFactor
                 for _, part in ipairs(character:GetDescendants()) do
                     if part:IsA("BasePart") then
@@ -254,29 +276,33 @@ local function FlyHack()
             end
         else
             currentVelocity = Vector3.zero
-            local flip2 = ClosestATV and ClosestATV.Body:FindFirstChild("Flip2")
-            if flip2 then
-                flip2.Enabled = false
+            if ClosestVehicle then
+                local bodyPart = ClosestVehicle:FindFirstChild("Body")
+                local flip2 = bodyPart and bodyPart:FindFirstChild("Flip2")
+                if flip2 then
+                    flip2.Enabled = false
+                end
             end
         end
     end)
-    -- Deceleration moved to Heartbeat (physics thread, less lag)
-    RunService.Heartbeat:Connect(function()
-        if not Enabled or not ClosestATV then return end
-        local atvModel = ClosestATV
-        -- ONLY apply deceleration if NO movement keys are pressed
+    
+    -- Deceleration (Heartbeat)
+    local heartbeatConnection
+    heartbeatConnection = RunService.Heartbeat:Connect(function()
+        if not Enabled or not ClosestVehicle then return end
+        
         local isMoving = UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.S) or
                          UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.D) or
                          UserInputService:IsKeyDown(Enum.KeyCode.X) or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
         
         if travel.Magnitude == 0 and not isMoving then
+            local vehicleModel = ClosestVehicle
             if not anchorToggle then
                 currentVelocity *= decelerationFactor
-                -- Stop deceleration when velocity is very low to prevent micro-lag
                 if currentVelocity.Magnitude < 0.1 then
                     currentVelocity = Vector3.zero
                 end
-                for _, part in ipairs(atvModel:GetDescendants()) do
+                for _, part in ipairs(vehicleModel:GetDescendants()) do
                     if part:IsA("BasePart") then
                         part.Anchored = false
                         part.Velocity = currentVelocity
@@ -284,7 +310,7 @@ local function FlyHack()
                 end
             else
                 currentVelocity = Vector3.zero
-                for _, part in ipairs(atvModel:GetDescendants()) do
+                for _, part in ipairs(vehicleModel:GetDescendants()) do
                     if part:IsA("BasePart") then
                         part.Anchored = true
                         part.Velocity = Vector3.zero
@@ -294,6 +320,7 @@ local function FlyHack()
         end
     end)
 end
+
 -- Flip Bypass
 RunService.RenderStepped:Connect(function()
     for _, v in ipairs(Workspace:GetChildren()) do
@@ -308,13 +335,14 @@ RunService.RenderStepped:Connect(function()
         end
     end
 end)
+
 -- Keybinds
 UserInputService.InputBegan:Connect(function(input, isProcessed)
     if isProcessed then return end
     if input.KeyCode == Enum.KeyCode.L then
         toggleLongNeck()
     elseif input.KeyCode == Enum.KeyCode.F then
-        toggleATVCollision()
+        toggleVehicleCollision()
     elseif input.KeyCode == Enum.KeyCode.Q then
         toggleSpeed()
     elseif input.KeyCode == Enum.KeyCode.V then
@@ -322,14 +350,15 @@ UserInputService.InputBegan:Connect(function(input, isProcessed)
     elseif input.KeyCode == Enum.KeyCode.N then
         adjustSpeed(-5)
     elseif input.KeyCode == Enum.KeyCode.Z then
-        toggleATVAnchoring()
+        toggleVehicleAnchoring()
     elseif input.KeyCode == Enum.KeyCode.K then
         toggleCharacterAnchoring()
     end
 end)
--- Movement
+
+-- Movement Input
 RunService.RenderStepped:Connect(function()
-    if Enabled and ClosestATV then
+    if Enabled and ClosestVehicle then
         local cameraCFrame = Camera.CFrame
         travel = Vector3.zero
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then travel += cameraCFrame.LookVector end
@@ -338,7 +367,6 @@ RunService.RenderStepped:Connect(function()
         if UserInputService:IsKeyDown(Enum.KeyCode.A) then travel -= cameraCFrame.RightVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.X) then travel += cameraCFrame.UpVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then travel -= cameraCFrame.UpVector end
-        -- Normalize travel vector to prevent diagonal speed boost
         if travel.Magnitude > 0 then
             travel = travel.Unit
         end
@@ -346,18 +374,23 @@ RunService.RenderStepped:Connect(function()
         travel = Vector3.zero
     end
 end)
+
 FlyHack()
+
 -- ==============================================
--- ADDITIONAL FUNCTIONS
+-- ADDITIONAL FUNCTIONS (UNCHANGED)
 -- ==============================================
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Efial/Chi/434704f21c527353a18f6e885e47b8117759de7d/Scripts/TridentSurvival.lua", true))()
+
+-- CJ Button GUI
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local playerGui = localPlayer:WaitForChild("PlayerGui")
--- CJ Button
+
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "CJButtonGui"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
+
 local CJButton = Instance.new("TextButton")
 CJButton.Name = "CJButton"
 CJButton.Parent = screenGui
@@ -372,44 +405,53 @@ CJButton.Position = UDim2.new(0.850000024, 29, 0.800000012, -75)
 CJButton.AnchorPoint = Vector2.new(0.5, 0.5)
 CJButton.BorderSizePixel = 0
 CJButton.AutoButtonColor = false
+
 local UICorner1 = Instance.new("UICorner")
 UICorner1.CornerRadius = UDim.new(1, 0)
 UICorner1.Parent = CJButton
+
 local UIStroke1 = Instance.new("UIStroke")
 UIStroke1.Thickness = 2
 UIStroke1.Color = Color3.fromRGB(40, 40, 40)
 UIStroke1.Transparency = 0.2
 UIStroke1.Parent = CJButton
+
 local function glowEffect(active)
-	CJButton.BackgroundTransparency = active and 0.2 or 0.4
+    CJButton.BackgroundTransparency = active and 0.2 or 0.4
 end
+
 local function pressCJ()
-	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.C, false, game)
-	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.C, false, game)
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
 end
+
 local function releaseCJ()
-	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.C, false, game)
-	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.C, false, game)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
 end
+
 CJButton.MouseButton1Down:Connect(function()
-	pressCJ()
-	glowEffect(true)
+    pressCJ()
+    glowEffect(true)
 end)
+
 CJButton.MouseButton1Up:Connect(function()
-	releaseCJ()
-	glowEffect(false)
+    releaseCJ()
+    glowEffect(false)
 end)
+
 CJButton.TouchLongPress:Connect(function()
-	pressCJ()
-	glowEffect(true)
+    pressCJ()
+    glowEffect(true)
 end)
--- Fixed touch release
+
 CJButton.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.Touch then
-		releaseCJ()
-		glowEffect(false)
-	end
+    if input.UserInputType == Enum.UserInputType.Touch then
+        releaseCJ()
+        glowEffect(false)
+    end
 end)
+
 -- L Button
 local LButton = Instance.new("ImageButton")
 LButton.Name = "LButton"
@@ -422,52 +464,38 @@ LButton.ImageRectOffset = Vector2.new(4, 4)
 LButton.ImageRectSize = Vector2.new(36, 36)
 LButton.ImageColor3 = Color3.fromRGB(180, 0, 255)
 LButton.MouseButton1Click:Connect(function()
-	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.L, false, game)
-	task.wait(0.05)
-	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.L, false, game)
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.L, false, game)
+    task.wait(0.05)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.L, false, game)
 end)
--- ==============================================
--- ONLY DRILL NO COOLDOWN (U Toggle)
--- ==============================================
-local UserInputService = game:GetService("UserInputService")
--- State tracking
-local features = {
-    drillNoCooldown = false
-}
--- Drill No Cooldown logic
+
+-- Drill No Cooldown (U Toggle)
+local features = { drillNoCooldown = false }
+
 local function toggleDrillNoCooldown()
     features.drillNoCooldown = not features.drillNoCooldown
     for _, v in getgc(true) do
         if type(v) == "table" and rawget(v, "type") == "MiningDrill" then
-            v.AttackCooldown = features.drillNoCooldown and 0 or 0.15
+            v.AttackCooldown = features.drillNoCooldown and 0.001 or 0.15
         end
     end
-    print("Drill No Cooldown:", features.drillNoCooldown and "Enabled" or "Disabled")
+    print("Drill No Cooldown:", features.drillNoCooldown and "Enabled (MAX SPEED)" or "Disabled")
 end
--- Key toggle: U for Drill No Cooldown
+
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.U then
         toggleDrillNoCooldown()
     end
 end)
--- ==============================================
--- STANDALONE WASD CONTROL PANEL (ZERO SPACES + MOBILE SAFE)
--- ==============================================
-local Players = game:GetService("Players")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local UserInputService = game:GetService("UserInputService")
-local localPlayer = Players.LocalPlayer
-local playerGui = localPlayer:WaitForChild("PlayerGui")
 
--- Create control panel GUI
+-- WASD Control Panel
 local wasdGui = Instance.new("ScreenGui")
 wasdGui.Name = "WASDControlPanel"
 wasdGui.ResetOnSpawn = false
 wasdGui.DisplayOrder = 1
 wasdGui.Parent = playerGui
 
--- Compact frame for WASD and L/F
 local buttonFrameLeft = Instance.new("Frame")
 buttonFrameLeft.Name = "WASDFrameLeft"
 buttonFrameLeft.Size = UDim2.new(0, 120, 0, 100)
@@ -475,15 +503,13 @@ buttonFrameLeft.Position = UDim2.new(0.08, 0, 0.02, 0)
 buttonFrameLeft.BackgroundTransparency = 1
 buttonFrameLeft.Parent = wasdGui
 
--- Compact frame for U/Q/Z/K
 local buttonFrameRight = Instance.new("Frame")
 buttonFrameRight.Name = "WASDFrameRight"
-buttonFrameRight.Size = UDim2.new(0, 80, 0, 100) -- Adjusted width
-buttonFrameRight.Position = UDim2.new(0.82, 0, -0.02, 0) -- Adjusted position to the right and to the top
+buttonFrameRight.Size = UDim2.new(0, 80, 0, 100)
+buttonFrameRight.Position = UDim2.new(0.82, 0, -0.02, 0)
 buttonFrameRight.BackgroundTransparency = 1
 buttonFrameRight.Parent = wasdGui
 
--- Button helper function
 local function createWASDButton(name, text, position, parentFrame)
     local button = Instance.new("TextButton")
     button.Name = name .. "Button"
@@ -499,9 +525,11 @@ local function createWASDButton(name, text, position, parentFrame)
     button.BorderSizePixel = 0
     button.AutoButtonColor = false
     button.ZIndex = 2
+    
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0.2, 0)
     corner.Parent = button
+    
     local stroke = Instance.new("UIStroke")
     stroke.Thickness = 2
     stroke.Color = Color3.new(0.1, 0.1, 0.1)
@@ -509,6 +537,7 @@ local function createWASDButton(name, text, position, parentFrame)
 
     local keyCode = Enum.KeyCode[name]
     local isPressed = false
+    
     local function pressKey()
         if not isPressed then
             isPressed = true
@@ -516,6 +545,7 @@ local function createWASDButton(name, text, position, parentFrame)
             button.BackgroundTransparency = 0.1
         end
     end
+    
     local function releaseKey()
         if isPressed then
             isPressed = false
@@ -537,7 +567,7 @@ local function createWASDButton(name, text, position, parentFrame)
     return button
 end
 
--- Zero-space glued layout for left side:
+-- Create buttons
 createWASDButton("L", "L", UDim2.new(0, 0, 0, 0), buttonFrameLeft)
 createWASDButton("W", "W", UDim2.new(0, 40, 0, 0), buttonFrameLeft)
 createWASDButton("F", "F", UDim2.new(0, 80, 0, 0), buttonFrameLeft)
@@ -545,8 +575,78 @@ createWASDButton("A", "A", UDim2.new(0, 0, 0, 50), buttonFrameLeft)
 createWASDButton("S", "S", UDim2.new(0, 40, 0, 50), buttonFrameLeft)
 createWASDButton("D", "D", UDim2.new(0, 80, 0, 50), buttonFrameLeft)
 
--- Layout for right side (U, Q, Z, K): Two buttons per row
-createWASDButton("U", "U", UDim2.new(0, 0, 0, 0), buttonFrameRight) -- Top Left
-createWASDButton("Q", "Q", UDim2.new(0, 40, 0, 0), buttonFrameRight) -- Top Right
-createWASDButton("Z", "Z", UDim2.new(0, 0, 0, 50), buttonFrameRight) -- Bottom Left
-createWASDButton("K", "K", UDim2.new(0, 40, 0, 50), buttonFrameRight) -- Bottom Right
+createWASDButton("U", "U", UDim2.new(0, 0, 0, 0), buttonFrameRight)
+createWASDButton("Q", "Q", UDim2.new(0, 40, 0, 0), buttonFrameRight)
+createWASDButton("Z", "Z", UDim2.new(0, 0, 0, 50), buttonFrameRight)
+createWASDButton("K", "K", UDim2.new(0, 40, 0, 50), buttonFrameRight)
+
+-- ==============================================
+-- ADDITIONAL FUNCTIONS (CrossHair)
+-- ==============================================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- CREATE GUI
+local CrosshairGui = Instance.new("ScreenGui")
+CrosshairGui.Name = "WorkingImageCrosshair"
+CrosshairGui.IgnoreGuiInset = true -- Critical for mobile center
+CrosshairGui.Parent = PlayerGui
+
+-- IMAGE LABEL WITH YOUR ASSET
+local CrosshairImage = Instance.new("ImageLabel")
+CrosshairImage.Size = UDim2.new(0, 40, 0, 40) -- Good size to see clearly
+CrosshairImage.BackgroundTransparency = 1
+CrosshairImage.Image = "rbxassetid://5998624778" -- YOUR ASSET ID
+CrosshairImage.Parent = CrosshairGui
+
+-- LOCK TO TRUE CENTER EVERY FRAME
+RunService.RenderStepped:Connect(function()
+    local screenSize = workspace.CurrentCamera.ViewportSize
+    CrosshairImage.Position = UDim2.new(
+        0, screenSize.X/2 - CrosshairImage.AbsoluteSize.X/2,
+        0, screenSize.Y/2 - CrosshairImage.AbsoluteSize.Y/2
+    )
+end)
+
+-- ==============================================
+-- ADDITIONAL FUNCTIONS (5X ZOOM)
+-- =============================================
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Camera = workspace.CurrentCamera
+
+local zoomEnabled = false
+local normalFOV = 70  -- Default Roblox FOV; updates dynamically
+local ZOOM_FOV = 12   -- 5x zoom
+
+-- Update normal FOV every frame when not zoomed
+RunService.RenderStepped:Connect(function()
+    if not zoomEnabled then
+        normalFOV = Camera.FieldOfView
+    end
+end)
+
+-- Persistent zoom setter
+local function applyZoom()
+    if zoomEnabled then
+        Camera.FieldOfView = ZOOM_FOV
+    else
+        Camera.FieldOfView = normalFOV
+    end
+end
+
+-- Run applyZoom every frame to override any game resets
+RunService.RenderStepped:Connect(applyZoom)
+
+-- Toggle on U key
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.U then
+        zoomEnabled = not zoomEnabled
+        applyZoom()  -- Immediate apply
+        print("Zoom:", zoomEnabled and "ON (5x)" or "OFF")
+    end
+end)
