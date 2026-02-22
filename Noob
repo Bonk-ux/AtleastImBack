@@ -1,3 +1,4 @@
+
 -- ==============================================
 -- VEHICLE FLY FUNCTIONALITY (ATV + CAR SUPPORT)
 -- ==============================================
@@ -126,14 +127,12 @@ else
     end)
 end
 
--- Vehicle Detection (ATV + CAR) - FIXED WITH RECURSIVE SEARCH
+-- Vehicle Detection (ATV + CAR)
 local function GetClosestVehicle()
     local closest, closestDistance = nil, math.huge
     for _, model in ipairs(Workspace:GetChildren()) do
         if model:IsA("Model") then
-            -- Search for seat recursively (handles nested seats in Body for Cars)
-            local seat = model:FindFirstChild("Seat", true)
-            -- Look for main part
+            local seat = model:FindFirstChild("Seat")
             local mainPart = model:FindFirstChild("Body") or model:FindFirstChild("Plastics2")
             if seat and mainPart then
                 local distance = (mainPart.Position - middle.Position).Magnitude
@@ -158,7 +157,7 @@ local function toggleVehicleCollision()
     end
 end
 
--- Toggle Vehicle Anchoring (Z Key) - FIXED WITH RECURSIVE SEARCH
+-- Toggle Vehicle Anchoring (Z Key)
 local function toggleVehicleAnchoring()
     anchorToggle = not anchorToggle
     if ClosestVehicle then
@@ -167,8 +166,7 @@ local function toggleVehicleAnchoring()
                 part.Anchored = anchorToggle
             end
         end
-        -- Search for seat recursively (handles nested seats in Body for Cars)
-        local vehicleSeat = ClosestVehicle:FindFirstChild("Seat", true)
+        local vehicleSeat = ClosestVehicle:FindFirstChild("Seat")
         if anchorToggle and vehicleSeat then
             characterSeatOffset = middle.Position - vehicleSeat.Position
             currentVelocity = Vector3.zero
@@ -219,8 +217,7 @@ local function FlyHack()
     local renderConnection
     renderConnection = RunService.RenderStepped:Connect(function()
         ClosestVehicle = GetClosestVehicle()
-        -- Search for seat recursively (handles nested seats in Body for Cars)
-        local vehicleSeat = ClosestVehicle and ClosestVehicle:FindFirstChild("Seat", true)
+        local vehicleSeat = ClosestVehicle and ClosestVehicle:FindFirstChild("Seat")
         local mainPart = ClosestVehicle and (ClosestVehicle:FindFirstChild("Body") or ClosestVehicle:FindFirstChild("Plastics2"))
         local deltaTime = RunService.RenderStepped:Wait()
         
@@ -476,10 +473,10 @@ local function toggleDrillNoCooldown()
     features.drillNoCooldown = not features.drillNoCooldown
     for _, v in getgc(true) do
         if type(v) == "table" and rawget(v, "type") == "MiningDrill" then
-            v.AttackCooldown = features.drillNoCooldown and 0.001 or 0.15
+            v.AttackCooldown = features.drillNoCooldown and 0 or 0.15
         end
     end
-    print("Drill No Cooldown:", features.drillNoCooldown and "Enabled (MAX SPEED)" or "Disabled")
+    print("Drill No Cooldown:", features.drillNoCooldown and "Enabled" or "Disabled")
 end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -612,7 +609,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ==============================================
--- ADDITIONAL FUNCTIONS (5X ZOOM)
+-- ADDITIONAL FUNCTIONS (5X)
 -- =============================================
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -650,3 +647,4 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         print("Zoom:", zoomEnabled and "ON (5x)" or "OFF")
     end
 end)
+
